@@ -9,3 +9,6 @@ weights/*
 pretrained
 data/Kitti/downsampled
 data/ModelNet/*.pkl
+
+# Local medical dataset
+local_data/

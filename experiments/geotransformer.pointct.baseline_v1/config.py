@@ -43,6 +43,12 @@ CT_PROJECTED_DIM = 256
 CT_HU_CLIP_MIN = -500.0
 CT_HU_CLIP_MAX = 2000.0
 
+# M2-3 frozen coarse GT correspondence contract. These thresholds describe
+# physical Point-to-CT support distances in millimetres and are deliberately
+# independent of both encoder configurations.
+GT_PRIMARY_MAX_DISTANCE_MM = 17.5
+GT_HIGH_CONFIDENCE_DISTANCE_MM = 15.0
+
 
 _C = SimpleNamespace()
 
@@ -81,6 +87,10 @@ _C.ct.coarse_raw_dim = CT_COARSE_RAW_DIM
 _C.ct.projected_dim = CT_PROJECTED_DIM
 _C.ct.hu_clip_min = CT_HU_CLIP_MIN
 _C.ct.hu_clip_max = CT_HU_CLIP_MAX
+
+_C.gt_coarse = SimpleNamespace()
+_C.gt_coarse.primary_max_distance_mm = GT_PRIMARY_MAX_DISTANCE_MM
+_C.gt_coarse.high_confidence_distance_mm = GT_HIGH_CONFIDENCE_DISTANCE_MM
 
 
 def make_cfg():

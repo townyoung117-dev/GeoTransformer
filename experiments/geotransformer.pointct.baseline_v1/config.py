@@ -29,6 +29,20 @@ POINT_FINE_FEATURE_DIM = 256
 POINT_COARSE_RAW_DIM = 1024
 POINT_PROJECTED_DIM = 256
 
+# M2-2 frozen CT sparse-context and external-surface-support contract. These
+# grid sizes are image-axis physical displacements in millimetres.
+CT_PHYSICAL_UNIT = 'mm'
+CT_FOREGROUND_HU = -500.0
+CT_CONTEXT_GRID_MM = 5.0
+CT_SUPPORT_GRID_MM = 20.0
+CT_INPUT_DIM = 1
+CT_STEM_DIM = 32
+CT_MID_DIM = 64
+CT_COARSE_RAW_DIM = 128
+CT_PROJECTED_DIM = 256
+CT_HU_CLIP_MIN = -500.0
+CT_HU_CLIP_MAX = 2000.0
+
 
 _C = SimpleNamespace()
 
@@ -54,6 +68,19 @@ _C.point.group_norm = POINT_GROUP_NORM
 _C.point.fine_feature_dim = POINT_FINE_FEATURE_DIM
 _C.point.coarse_raw_dim = POINT_COARSE_RAW_DIM
 _C.point.projected_dim = POINT_PROJECTED_DIM
+
+_C.ct = SimpleNamespace()
+_C.ct.physical_unit = CT_PHYSICAL_UNIT
+_C.ct.foreground_hu = CT_FOREGROUND_HU
+_C.ct.context_grid_mm = CT_CONTEXT_GRID_MM
+_C.ct.support_grid_mm = CT_SUPPORT_GRID_MM
+_C.ct.input_dim = CT_INPUT_DIM
+_C.ct.stem_dim = CT_STEM_DIM
+_C.ct.mid_dim = CT_MID_DIM
+_C.ct.coarse_raw_dim = CT_COARSE_RAW_DIM
+_C.ct.projected_dim = CT_PROJECTED_DIM
+_C.ct.hu_clip_min = CT_HU_CLIP_MIN
+_C.ct.hu_clip_max = CT_HU_CLIP_MAX
 
 
 def make_cfg():

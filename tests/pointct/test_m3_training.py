@@ -1,8 +1,10 @@
 import ast
+import hashlib
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -22,6 +24,7 @@ except ModuleNotFoundError:
 
 
 if torch is not None:
+    import train_m3
     import training
     from gt_correspondence import build_coarse_gt_correspondence
     from matching_loss import (
@@ -30,12 +33,14 @@ if torch is not None:
     )
     from training import (
         BATCH_SIZE,
+        CHECKPOINT_VERSION,
         PRECISION,
         SMOKE_SPLIT_STATUS,
         TRAINING_DEFAULTS_STATUS,
         M3TrainingContractError,
         TrainingConfig,
         aggregate_step_results,
+        build_formal_subject_split,
         build_subject_split,
         create_optimizer,
         load_checkpoint,
@@ -46,6 +51,7 @@ if torch is not None:
         set_random_seed,
         validate_training_config,
     )
+    from training_protocol import load_training_protocol
 
 
     class ToyPointEncoder(torch.nn.Module):
@@ -183,11 +189,78 @@ class M3TrainingSourceContractTest(unittest.TestCase):
         self.assertIn("BATCH_SIZE = 1", source)
         self.assertIn("PRECISION = 'fp32'", source)
 
+    def test_m3_6b_1_perturbation_source_is_untouched(self):
+        source = (EXPERIMENT_DIR / 'perturbation.py').read_text(encoding='utf-8')
+        digest = hashlib.sha256(source.encode('utf-8')).hexdigest()
+        self.assertEqual(
+            digest,
+            '0a858b38172c6b17c88df37bfe4b0e59ae711b974f349cf0776330f313aaff95',
+        )
+
+    def test_formal_training_reuses_existing_perturbation_api(self):
+        tree = ast.parse((EXPERIMENT_DIR / 'train_m3.py').read_text(encoding='utf-8'))
+        imported = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == 'perturbation'
+            for alias in node.names
+        }
+        self.assertEqual(
+            imported,
+            {'augment_point_sample', 'derive_perturbation_seed'},
+        )
+
+    def test_formal_augmentation_precedes_training_step_and_point_collate(self):
+        source = (EXPERIMENT_DIR / 'train_m3.py').read_text(encoding='utf-8')
+        augmentation = source.index('step_sample = augment_formal_training_sample(')
+        training_step = source.index('result = run_training_step(', augmentation)
+        self.assertLess(augmentation, training_step)
+        self.assertIn('point_collate_fn=m2_point_collate_fn', source[training_step:])
+        helper_start = source.index('def augment_formal_training_sample(')
+        helper_end = source.index('\ndef iter_formal_validation_samples(', helper_start)
+        self.assertNotIn('m2_point_collate_fn', source[helper_start:helper_end])
+
+    def test_train_loop_does_not_execute_test_split(self):
+        source = (EXPERIMENT_DIR / 'train_m3.py').read_text(encoding='utf-8')
+        self.assertNotIn('for dataset_index in split.test_indices', source)
+        self.assertNotIn('run_test', source)
+        self.assertIn('(manifest only; not executed)', source)
+
+    def test_formal_logging_and_checkpoint_fields_are_explicit(self):
+        source = (EXPERIMENT_DIR / 'train_m3.py').read_text(encoding='utf-8')
+        for field in (
+            'num_val_subjects',
+            'num_val_perturbations',
+            'val_mean_loss',
+            'val_mild_mean_loss',
+            'val_moderate_mean_loss',
+            'val_hard_mean_loss',
+            'protocol_version',
+            'protocol_hash',
+            'test_subject_ids',
+            'perturbation_root_seed',
+            'perturbation_seed_scheme_version',
+        ):
+            self.assertIn(field, source)
+
+    def test_formal_best_checkpoint_uses_only_overall_validation_loss(self):
+        source = (EXPERIMENT_DIR / 'train_m3.py').read_text(encoding='utf-8')
+        call_start = source.index('checkpoint_result = save_epoch_checkpoints(')
+        call_end = source.index("best_val_loss = checkpoint_result['best_val_loss']", call_start)
+        checkpoint_call = source[call_start:call_end]
+        self.assertIn("val_loss=val_stats['mean_loss']", checkpoint_call)
+        self.assertNotIn('test_', checkpoint_call)
+        self.assertNotIn('rre', checkpoint_call.lower())
+        self.assertNotIn('rte', checkpoint_call.lower())
+
 
 @unittest.skipUnless(torch is not None, 'PyTorch is not installed locally.')
 class M3TrainingContractTest(unittest.TestCase):
     def setUp(self):
         set_random_seed(7)
+        self.protocol = load_training_protocol(
+            EXPERIMENT_DIR / 'protocols' / 'm3_6b_5fold_v1.json'
+        )
         self.point_encoder = ToyPointEncoder()
         self.ct_encoder = ToyCTEncoder()
         self.matcher = ToyMatcher()
@@ -199,6 +272,22 @@ class M3TrainingContractTest(unittest.TestCase):
             weight_decay=0.0,
         )
         self.sample = self._sample()
+
+    @staticmethod
+    def _formal_raw_sample(subject_id):
+        return {
+            'subject_id': subject_id,
+            'point_xyz_phys': np.asarray(
+                [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 4.0, 1.0]],
+                dtype=np.float32,
+            ),
+            'point_normal': np.asarray(
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                dtype=np.float32,
+            ),
+            'gt_transform': np.eye(4, dtype=np.float64),
+            'gt_transform_direction': 'Point Cloud -> CT',
+        }
 
     @staticmethod
     def _sample():
@@ -313,6 +402,124 @@ class M3TrainingContractTest(unittest.TestCase):
 
         with self.assertRaisesRegex(M3TrainingContractError, 'duplicate'):
             build_subject_split(Dataset(), ['A', 'A'], ['B'])
+
+    def test_formal_fold_resolves_only_after_exact_dataset_match(self):
+        class Dataset:
+            records = [
+                {'subject_id': subject_id}
+                for subject_id in reversed(self.protocol['ready_subject_ids'])
+            ]
+
+        split = build_formal_subject_split(Dataset(), self.protocol, 'Fold1')
+        self.assertEqual(split.fold_id, 'Fold1')
+        self.assertEqual(
+            split.train_subject_ids,
+            ('Pat11', 'Pat3', 'Pat8', 'Pat9', 'Pat1', 'Pat2'),
+        )
+        self.assertEqual(split.val_subject_ids, ('Pat7', 'Pat4'))
+        self.assertEqual(split.test_subject_ids, ('Pat12', 'Pat6', 'Pat5'))
+
+    def test_formal_dataset_ready_mismatch_fails_closed(self):
+        class Dataset:
+            records = [
+                {'subject_id': subject_id}
+                for subject_id in self.protocol['ready_subject_ids'][:-1]
+            ]
+
+        with self.assertRaisesRegex(M3TrainingContractError, 'ready subjects mismatch'):
+            build_formal_subject_split(Dataset(), self.protocol, 'Fold1')
+
+    def test_formal_dataset_duplicate_record_fails_closed(self):
+        class Dataset:
+            records = [
+                {'subject_id': subject_id}
+                for subject_id in self.protocol['ready_subject_ids']
+            ] + [{'subject_id': 'Pat1'}]
+
+        with self.assertRaisesRegex(M3TrainingContractError, 'duplicate subject record'):
+            build_formal_subject_split(Dataset(), self.protocol, 'Fold1')
+
+    def test_formal_cli_requires_protocol_and_fold(self):
+        base = {
+            'protocol_manifest': None,
+            'fold_id': None,
+            'train_subjects': None,
+            'val_subjects': None,
+        }
+        for override in (
+            {'protocol_manifest': Path('protocol.json')},
+            {'fold_id': 'Fold1'},
+        ):
+            with self.subTest(override=override):
+                with self.assertRaisesRegex(M3TrainingContractError, 'requires both'):
+                    train_m3.resolve_training_mode(SimpleNamespace(**{**base, **override}))
+
+    def test_formal_and_manual_cli_modes_are_mutually_exclusive(self):
+        args = SimpleNamespace(
+            protocol_manifest=Path('protocol.json'),
+            fold_id='Fold1',
+            train_subjects=['Pat1'],
+            val_subjects=['Pat2'],
+        )
+        with self.assertRaisesRegex(M3TrainingContractError, 'mutually exclusive'):
+            train_m3.resolve_training_mode(args)
+
+    def test_manual_cli_mode_remains_available_for_smoke(self):
+        args = SimpleNamespace(
+            protocol_manifest=None,
+            fold_id=None,
+            train_subjects=['Pat1'],
+            val_subjects=['Pat2'],
+        )
+        self.assertEqual(train_m3.resolve_training_mode(args), 'manual')
+
+    def test_formal_validation_expands_three_fixed_samples_per_subject(self):
+        subject_ids = list(self.protocol['ready_subject_ids'])
+
+        class Dataset:
+            records = [{'subject_id': subject_id} for subject_id in subject_ids]
+
+            def __getitem__(inner_self, index):
+                return self._formal_raw_sample(subject_ids[index])
+
+        dataset = Dataset()
+        split = build_formal_subject_split(dataset, self.protocol, 'Fold1')
+        cases = list(train_m3.iter_formal_validation_samples(dataset, split, self.protocol))
+        self.assertEqual(len(cases), 3 * len(split.val_subject_ids))
+        self.assertEqual(
+            [(subject, severity) for subject, severity, _ in cases],
+            [
+                ('Pat7', 'mild'),
+                ('Pat7', 'moderate'),
+                ('Pat7', 'hard'),
+                ('Pat4', 'mild'),
+                ('Pat4', 'moderate'),
+                ('Pat4', 'hard'),
+            ],
+        )
+        for _, _, sample in cases:
+            self.assertIn('gt_transform', sample)
+            self.assertIn('m3_6b_perturbation', sample)
+
+    def test_formal_training_seed_depends_on_epoch_not_iteration_order(self):
+        subjects = list(self.protocol['folds']['Fold1']['train_subject_ids'])
+        first = {
+            subject: train_m3.derive_train_sample_seed(self.protocol, 'Fold1', 4, subject)
+            for subject in subjects
+        }
+        subjects.reverse()
+        second = {
+            subject: train_m3.derive_train_sample_seed(self.protocol, 'Fold1', 4, subject)
+            for subject in subjects
+        }
+        next_epoch = train_m3.derive_train_sample_seed(
+            self.protocol,
+            'Fold1',
+            5,
+            subjects[0],
+        )
+        self.assertEqual(first, second)
+        self.assertNotEqual(first[subjects[0]], next_epoch)
 
     def test_training_step_updates_all_three_modules_with_finite_gradients(self):
         point_before = self._module_parameters(self.point_encoder)
@@ -568,6 +775,168 @@ class M3TrainingContractTest(unittest.TestCase):
         }
         fields.update(overrides)
         return fields
+
+    def _formal_checkpoint_fields(self, **overrides):
+        fields = self._checkpoint_fields(
+            train_subject_ids=['SubjectA'],
+            val_subject_ids=['SubjectB'],
+            formal_protocol=True,
+            protocol_version='m3_6b_5fold_v1',
+            protocol_hash='a' * 64,
+            fold_id='Fold1',
+            test_subject_ids=['SubjectC'],
+            perturbation_root_seed=20260815,
+            perturbation_seed_scheme_version='m3_6b_seed_v1',
+        )
+        fields.update(overrides)
+        return fields
+
+    @staticmethod
+    def _load_torch_payload(path):
+        try:
+            return torch.load(path, map_location='cpu', weights_only=True)
+        except TypeError:
+            return torch.load(path, map_location='cpu')
+
+    def _formal_load_fields(self, **overrides):
+        fields = {
+            'train_subject_ids': ['SubjectA'],
+            'val_subject_ids': ['SubjectB'],
+            'map_location': 'cpu',
+            'expected_training_config': TrainingConfig(),
+            'formal_protocol': True,
+            'protocol_version': 'm3_6b_5fold_v1',
+            'protocol_hash': 'a' * 64,
+            'fold_id': 'Fold1',
+            'test_subject_ids': ['SubjectC'],
+            'perturbation_root_seed': 20260815,
+            'perturbation_seed_scheme_version': 'm3_6b_seed_v1',
+        }
+        fields.update(overrides)
+        return fields
+
+    def _assert_formal_resume_mismatch_before_mutation(self, override, message):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'formal.pt'
+            save_checkpoint(path, **self._formal_checkpoint_fields())
+            with torch.no_grad():
+                for parameter in self.point_encoder.parameters():
+                    parameter.add_(11.0)
+            before = self._module_parameters(self.point_encoder)
+            with self.assertRaisesRegex(M3TrainingContractError, message):
+                load_checkpoint(
+                    path,
+                    self.point_encoder,
+                    self.ct_encoder,
+                    self.matcher,
+                    self.optimizer,
+                    **self._formal_load_fields(**override),
+                )
+        self.assertFalse(self._any_parameter_changed(self.point_encoder, before))
+
+    def test_formal_checkpoint_stores_v2_protocol_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'formal.pt'
+            save_checkpoint(path, **self._formal_checkpoint_fields())
+            payload = self._load_torch_payload(path)
+        self.assertEqual(payload['checkpoint_version'], CHECKPOINT_VERSION)
+        self.assertIs(payload['formal_protocol'], True)
+        self.assertEqual(payload['protocol_version'], 'm3_6b_5fold_v1')
+        self.assertEqual(payload['protocol_hash'], 'a' * 64)
+        self.assertEqual(payload['fold_id'], 'Fold1')
+        self.assertEqual(payload['test_subject_ids'], ['SubjectC'])
+        self.assertEqual(payload['perturbation_root_seed'], 20260815)
+        self.assertEqual(payload['perturbation_seed_scheme_version'], 'm3_6b_seed_v1')
+
+    def test_formal_checkpoint_roundtrip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'formal.pt'
+            save_checkpoint(path, **self._formal_checkpoint_fields())
+            state = load_checkpoint(
+                path,
+                self.point_encoder,
+                self.ct_encoder,
+                self.matcher,
+                self.optimizer,
+                **self._formal_load_fields(),
+            )
+        self.assertTrue(state['formal_protocol'])
+
+    def test_protocol_hash_mismatch_fails_before_model_mutation(self):
+        self._assert_formal_resume_mismatch_before_mutation(
+            {'protocol_hash': 'b' * 64},
+            'protocol_hash',
+        )
+
+    def test_protocol_version_mismatch_fails_before_model_mutation(self):
+        self._assert_formal_resume_mismatch_before_mutation(
+            {'protocol_version': 'other'},
+            'protocol_version',
+        )
+
+    def test_fold_mismatch_fails_before_model_mutation(self):
+        self._assert_formal_resume_mismatch_before_mutation(
+            {'fold_id': 'Fold2'},
+            'fold_id',
+        )
+
+    def test_test_id_mismatch_fails_before_model_mutation(self):
+        self._assert_formal_resume_mismatch_before_mutation(
+            {'test_subject_ids': ['SubjectD']},
+            'test_subject_ids',
+        )
+
+    def test_root_seed_mismatch_fails_before_model_mutation(self):
+        self._assert_formal_resume_mismatch_before_mutation(
+            {'perturbation_root_seed': 1},
+            'perturbation_root_seed',
+        )
+
+    def test_seed_scheme_mismatch_fails_before_model_mutation(self):
+        self._assert_formal_resume_mismatch_before_mutation(
+            {'perturbation_seed_scheme_version': 'other'},
+            'perturbation_seed_scheme_version',
+        )
+
+    def test_training_config_mismatch_fails_before_model_mutation(self):
+        self._assert_formal_resume_mismatch_before_mutation(
+            {'expected_training_config': TrainingConfig(learning_rate=2e-4)},
+            'training_config',
+        )
+
+    def test_old_smoke_checkpoint_cannot_resume_into_formal_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'smoke.pt'
+            save_checkpoint(path, **self._checkpoint_fields())
+            before = self._module_parameters(self.point_encoder)
+            with self.assertRaisesRegex(M3TrainingContractError, 'old manual/smoke'):
+                load_checkpoint(
+                    path,
+                    self.point_encoder,
+                    self.ct_encoder,
+                    self.matcher,
+                    self.optimizer,
+                    **self._formal_load_fields(),
+                )
+        self.assertFalse(self._any_parameter_changed(self.point_encoder, before))
+
+    def test_formal_checkpoint_cannot_resume_into_smoke_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'formal.pt'
+            save_checkpoint(path, **self._formal_checkpoint_fields())
+            before = self._module_parameters(self.point_encoder)
+            with self.assertRaisesRegex(M3TrainingContractError, 'formal protocol checkpoint'):
+                load_checkpoint(
+                    path,
+                    self.point_encoder,
+                    self.ct_encoder,
+                    self.matcher,
+                    self.optimizer,
+                    train_subject_ids=['SubjectA'],
+                    val_subject_ids=['SubjectB'],
+                    map_location='cpu',
+                )
+        self.assertFalse(self._any_parameter_changed(self.point_encoder, before))
 
     def test_checkpoint_roundtrip_restores_models_optimizer_and_progress(self):
         run_training_step(

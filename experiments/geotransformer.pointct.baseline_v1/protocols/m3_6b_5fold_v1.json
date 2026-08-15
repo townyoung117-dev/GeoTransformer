@@ -1,0 +1,116 @@
+{
+  "protocol_version": "m3_6b_5fold_v1",
+  "protocol_hash": "c0c635c1cb897ce33d15ba3ed58abdb12a8c5a8feb6a82fe51910146e8a99fac",
+  "seed_scheme_version": "m3_6b_seed_v1",
+  "perturbation_root_seed": 20260815,
+  "coordinate_system": "LPS",
+  "physical_unit": "mm",
+  "transform_direction": "Point Cloud -> CT",
+  "ready_subject_ids": [
+    "Pat1",
+    "Pat2",
+    "Pat3",
+    "Pat4",
+    "Pat5",
+    "Pat6",
+    "Pat7",
+    "Pat8",
+    "Pat9",
+    "Pat11",
+    "Pat12"
+  ],
+  "groups": {
+    "G1": ["Pat12", "Pat6", "Pat5"],
+    "G2": ["Pat7", "Pat4"],
+    "G3": ["Pat11", "Pat3"],
+    "G4": ["Pat8", "Pat9"],
+    "G5": ["Pat1", "Pat2"]
+  },
+  "folds": {
+    "Fold1": {
+      "test_subject_ids": ["Pat12", "Pat6", "Pat5"],
+      "val_subject_ids": ["Pat7", "Pat4"],
+      "train_subject_ids": ["Pat11", "Pat3", "Pat8", "Pat9", "Pat1", "Pat2"]
+    },
+    "Fold2": {
+      "test_subject_ids": ["Pat7", "Pat4"],
+      "val_subject_ids": ["Pat11", "Pat3"],
+      "train_subject_ids": ["Pat12", "Pat6", "Pat5", "Pat8", "Pat9", "Pat1", "Pat2"]
+    },
+    "Fold3": {
+      "test_subject_ids": ["Pat11", "Pat3"],
+      "val_subject_ids": ["Pat8", "Pat9"],
+      "train_subject_ids": ["Pat12", "Pat6", "Pat5", "Pat7", "Pat4", "Pat1", "Pat2"]
+    },
+    "Fold4": {
+      "test_subject_ids": ["Pat8", "Pat9"],
+      "val_subject_ids": ["Pat1", "Pat2"],
+      "train_subject_ids": ["Pat12", "Pat6", "Pat5", "Pat7", "Pat4", "Pat11", "Pat3"]
+    },
+    "Fold5": {
+      "test_subject_ids": ["Pat1", "Pat2"],
+      "val_subject_ids": ["Pat12", "Pat6", "Pat5"],
+      "train_subject_ids": ["Pat7", "Pat4", "Pat11", "Pat3", "Pat8", "Pat9"]
+    }
+  },
+  "train_perturbation": {
+    "purpose": "train",
+    "severity": "train",
+    "max_rotation_deg": 20.0,
+    "max_translation_mm": 20.0,
+    "variant_count": 1,
+    "epoch_policy": "zero_based_epoch"
+  },
+  "validation_perturbations": [
+    {
+      "purpose": "val",
+      "severity": "mild",
+      "max_rotation_deg": 5.0,
+      "max_translation_mm": 5.0,
+      "variant_count": 1,
+      "epoch_policy": "fixed_none"
+    },
+    {
+      "purpose": "val",
+      "severity": "moderate",
+      "max_rotation_deg": 10.0,
+      "max_translation_mm": 10.0,
+      "variant_count": 1,
+      "epoch_policy": "fixed_none"
+    },
+    {
+      "purpose": "val",
+      "severity": "hard",
+      "max_rotation_deg": 20.0,
+      "max_translation_mm": 20.0,
+      "variant_count": 1,
+      "epoch_policy": "fixed_none"
+    }
+  ],
+  "test_perturbations": [
+    {
+      "purpose": "test",
+      "severity": "mild",
+      "max_rotation_deg": 5.0,
+      "max_translation_mm": 5.0,
+      "variant_count": 5,
+      "epoch_policy": "fixed_none"
+    },
+    {
+      "purpose": "test",
+      "severity": "moderate",
+      "max_rotation_deg": 10.0,
+      "max_translation_mm": 10.0,
+      "variant_count": 5,
+      "epoch_policy": "fixed_none"
+    },
+    {
+      "purpose": "test",
+      "severity": "hard",
+      "max_rotation_deg": 20.0,
+      "max_translation_mm": 20.0,
+      "variant_count": 5,
+      "epoch_policy": "fixed_none"
+    }
+  ]
+}

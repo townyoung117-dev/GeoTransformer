@@ -1,4 +1,4 @@
-"""M3-6A Point-CT end-to-end training infrastructure.
+"""M3-6A/M3-6B Point-CT end-to-end training infrastructure.
 
 The formal objective is the frozen M3-3 collision-aware matching loss.  Ground
 truth is constructed from encoder-produced physical coarse coordinates only
@@ -19,13 +19,19 @@ import torch
 
 from gt_correspondence import build_coarse_gt_correspondence
 from matching_loss import compute_collision_aware_match_loss
+from training_protocol import (
+    M3TrainingProtocolError,
+    resolve_fold,
+    validate_dataset_ready_subjects,
+)
 
 
 TRAINING_SMOKE_DEFAULT_LEARNING_RATE = 1e-4
 TRAINING_SMOKE_DEFAULT_WEIGHT_DECAY = 1e-4
 TRAINING_DEFAULTS_STATUS = 'TRAINING SMOKE DEFAULTS - NOT FROZEN PAPER HYPERPARAMETERS'
 SMOKE_SPLIT_STATUS = 'SMOKE SPLIT ONLY - NOT FROZEN EVALUATION SPLIT'
-CHECKPOINT_VERSION = 1
+SMOKE_CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 BATCH_SIZE = 1
 PRECISION = 'fp32'
 
@@ -50,6 +56,17 @@ class SubjectSplit:
     val_subject_ids: tuple
     train_indices: tuple
     val_indices: tuple
+
+
+@dataclass(frozen=True)
+class FormalSubjectSplit:
+    fold_id: str
+    train_subject_ids: tuple
+    val_subject_ids: tuple
+    test_subject_ids: tuple
+    train_indices: tuple
+    val_indices: tuple
+    test_indices: tuple
 
 
 def _require_nonnegative_integer(value, name: str) -> int:
@@ -170,7 +187,11 @@ def build_subject_split(dataset, train_subject_ids, val_subject_ids) -> SubjectS
         if not isinstance(record, Mapping):
             raise M3TrainingContractError('dataset records must be mappings.')
         subject_id = record.get('subject_id')
-        if not isinstance(subject_id, str) or not subject_id.strip():
+        if (
+            not isinstance(subject_id, str)
+            or not subject_id.strip()
+            or subject_id != subject_id.strip()
+        ):
             raise M3TrainingContractError('every ready dataset record requires a subject_id.')
         subject_to_indices.setdefault(subject_id, []).append(index)
 
@@ -192,6 +213,43 @@ def build_subject_split(dataset, train_subject_ids, val_subject_ids) -> SubjectS
     if not val_indices:
         raise M3TrainingContractError('resolved val split is empty.')
     return SubjectSplit(train_ids, val_ids, train_indices, val_indices)
+
+
+def build_formal_subject_split(dataset, protocol, fold_id) -> FormalSubjectSplit:
+    """Resolve a formal fold only after exact ready-dataset validation."""
+    records = getattr(dataset, 'records', None)
+    if not isinstance(records, list):
+        raise M3TrainingContractError('dataset must expose ready manifest records as a list.')
+    subject_to_index = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            raise M3TrainingContractError('dataset records must be mappings.')
+        subject_id = record.get('subject_id')
+        if not isinstance(subject_id, str) or not subject_id.strip():
+            raise M3TrainingContractError('every ready dataset record requires a subject_id.')
+        if subject_id in subject_to_index:
+            raise M3TrainingContractError(
+                f'formal dataset contains duplicate subject record: {subject_id!r}.'
+            )
+        subject_to_index[subject_id] = index
+    try:
+        validate_dataset_ready_subjects(protocol, tuple(subject_to_index))
+        fold = resolve_fold(protocol, fold_id)
+    except M3TrainingProtocolError as error:
+        raise M3TrainingContractError(f'formal protocol validation failed: {error}') from error
+
+    def indices(split_name):
+        return tuple(subject_to_index[subject_id] for subject_id in fold[split_name])
+
+    return FormalSubjectSplit(
+        fold_id=fold['fold_id'],
+        train_subject_ids=fold['train_subject_ids'],
+        val_subject_ids=fold['val_subject_ids'],
+        test_subject_ids=fold['test_subject_ids'],
+        train_indices=indices('train_subject_ids'),
+        val_indices=indices('val_subject_ids'),
+        test_indices=indices('test_subject_ids'),
+    )
 
 
 def _trainable_parameters(module, module_name: str):
@@ -689,6 +747,13 @@ def _checkpoint_payload(
     seed,
     training_config,
     best_val_loss,
+    formal_protocol=False,
+    protocol_version=None,
+    protocol_hash=None,
+    fold_id=None,
+    test_subject_ids=None,
+    perturbation_root_seed=None,
+    perturbation_seed_scheme_version=None,
 ):
     epoch = _require_nonnegative_integer(epoch, 'epoch')
     global_step = _require_nonnegative_integer(global_step, 'global_step')
@@ -699,8 +764,10 @@ def _checkpoint_payload(
     if overlap:
         raise M3TrainingContractError('checkpoint split contains train/val leakage.')
     best_val_loss = _require_best_val_loss(best_val_loss)
-    return {
-        'checkpoint_version': CHECKPOINT_VERSION,
+    if not isinstance(formal_protocol, bool):
+        raise M3TrainingContractError('formal_protocol must be a boolean.')
+    payload = {
+        'checkpoint_version': CHECKPOINT_VERSION if formal_protocol else SMOKE_CHECKPOINT_VERSION,
         'epoch': epoch,
         'global_step': global_step,
         'point_encoder_state_dict': point_encoder.state_dict(),
@@ -713,6 +780,54 @@ def _checkpoint_payload(
         'training_config': _normalize_training_config(training_config),
         'best_val_loss': best_val_loss,
     }
+    formal_values = (
+        protocol_version,
+        protocol_hash,
+        fold_id,
+        test_subject_ids,
+        perturbation_root_seed,
+        perturbation_seed_scheme_version,
+    )
+    if not formal_protocol:
+        if any(value is not None for value in formal_values):
+            raise M3TrainingContractError(
+                'manual/smoke checkpoints must not contain formal protocol metadata.'
+            )
+        return payload
+
+    for value, name in (
+        (protocol_version, 'protocol_version'),
+        (protocol_hash, 'protocol_hash'),
+        (fold_id, 'fold_id'),
+        (perturbation_seed_scheme_version, 'perturbation_seed_scheme_version'),
+    ):
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            raise M3TrainingContractError(f'{name} must be a non-empty formal checkpoint string.')
+    if len(protocol_hash) != 64 or any(
+        character not in '0123456789abcdef' for character in protocol_hash
+    ):
+        raise M3TrainingContractError(
+            'protocol_hash must be a lowercase SHA-256 hex digest.'
+        )
+    test_ids = _validate_subject_id_list(test_subject_ids, 'test_subject_ids')
+    if set(train_ids) & set(test_ids) or set(val_ids) & set(test_ids):
+        raise M3TrainingContractError('formal checkpoint split contains test leakage.')
+    root_seed = _require_nonnegative_integer(
+        perturbation_root_seed,
+        'perturbation_root_seed',
+    )
+    payload.update(
+        {
+            'formal_protocol': True,
+            'protocol_version': protocol_version,
+            'protocol_hash': protocol_hash,
+            'fold_id': fold_id,
+            'test_subject_ids': list(test_ids),
+            'perturbation_root_seed': root_seed,
+            'perturbation_seed_scheme_version': perturbation_seed_scheme_version,
+        }
+    )
+    return payload
 
 
 def save_checkpoint(path, **checkpoint_fields):
@@ -769,7 +884,11 @@ def _validate_checkpoint(payload):
     missing = sorted(required.difference(payload))
     if missing:
         raise M3TrainingContractError(f'checkpoint is malformed; missing fields: {missing}.')
-    if payload['checkpoint_version'] != CHECKPOINT_VERSION:
+    checkpoint_version = payload['checkpoint_version']
+    if isinstance(checkpoint_version, bool) or checkpoint_version not in {
+        SMOKE_CHECKPOINT_VERSION,
+        CHECKPOINT_VERSION,
+    }:
         raise M3TrainingContractError('checkpoint version is unsupported.')
     _require_nonnegative_integer(payload['epoch'], 'checkpoint epoch')
     _require_nonnegative_integer(payload['global_step'], 'checkpoint global_step')
@@ -788,7 +907,62 @@ def _validate_checkpoint(payload):
         if not isinstance(payload[field], Mapping):
             raise M3TrainingContractError(f'checkpoint field {field} must be a mapping.')
     _require_best_val_loss(payload['best_val_loss'], 'checkpoint best_val_loss')
-    return train_ids, val_ids
+    if checkpoint_version == SMOKE_CHECKPOINT_VERSION:
+        if payload.get('formal_protocol') is True:
+            raise M3TrainingContractError(
+                'checkpoint v1 cannot claim to be a formal protocol checkpoint.'
+            )
+        return {
+            'formal_protocol': False,
+            'train_subject_ids': train_ids,
+            'val_subject_ids': val_ids,
+            'test_subject_ids': (),
+        }
+
+    formal_fields = {
+        'formal_protocol',
+        'protocol_version',
+        'protocol_hash',
+        'fold_id',
+        'test_subject_ids',
+        'perturbation_root_seed',
+        'perturbation_seed_scheme_version',
+    }
+    formal_missing = sorted(formal_fields.difference(payload))
+    if formal_missing:
+        raise M3TrainingContractError(
+            f'formal checkpoint is malformed; missing fields: {formal_missing}.'
+        )
+    if payload['formal_protocol'] is not True:
+        raise M3TrainingContractError('checkpoint v2 requires formal_protocol=true.')
+    for field in (
+        'protocol_version',
+        'protocol_hash',
+        'fold_id',
+        'perturbation_seed_scheme_version',
+    ):
+        value = payload[field]
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            raise M3TrainingContractError(f'checkpoint field {field} must be a non-empty string.')
+    if len(payload['protocol_hash']) != 64 or any(
+        character not in '0123456789abcdef' for character in payload['protocol_hash']
+    ):
+        raise M3TrainingContractError(
+            'checkpoint protocol_hash must be a lowercase SHA-256 hex digest.'
+        )
+    test_ids = _validate_subject_id_list(payload['test_subject_ids'], 'checkpoint test_subject_ids')
+    if set(train_ids) & set(test_ids) or set(val_ids) & set(test_ids):
+        raise M3TrainingContractError('formal checkpoint split contains test leakage.')
+    _require_nonnegative_integer(
+        payload['perturbation_root_seed'],
+        'checkpoint perturbation_root_seed',
+    )
+    return {
+        'formal_protocol': True,
+        'train_subject_ids': train_ids,
+        'val_subject_ids': val_ids,
+        'test_subject_ids': test_ids,
+    }
 
 
 def load_checkpoint(
@@ -802,16 +976,54 @@ def load_checkpoint(
     val_subject_ids,
     map_location,
     expected_training_config=None,
+    formal_protocol=False,
+    protocol_version=None,
+    protocol_hash=None,
+    fold_id=None,
+    test_subject_ids=None,
+    perturbation_root_seed=None,
+    perturbation_seed_scheme_version=None,
 ):
     path = Path(path)
     if not path.is_file():
         raise M3TrainingContractError(f'checkpoint does not exist: {path}.')
     payload = _load_checkpoint_file(path, map_location)
-    checkpoint_train_ids, checkpoint_val_ids = _validate_checkpoint(payload)
+    checkpoint_contract = _validate_checkpoint(payload)
     current_train_ids = _validate_subject_id_list(train_subject_ids, 'train_subject_ids')
     current_val_ids = _validate_subject_id_list(val_subject_ids, 'val_subject_ids')
-    if checkpoint_train_ids != current_train_ids or checkpoint_val_ids != current_val_ids:
+    if (
+        checkpoint_contract['train_subject_ids'] != current_train_ids
+        or checkpoint_contract['val_subject_ids'] != current_val_ids
+    ):
         raise M3TrainingContractError('checkpoint split does not match the current split contract.')
+    if not isinstance(formal_protocol, bool):
+        raise M3TrainingContractError('formal_protocol must be a boolean.')
+    if formal_protocol:
+        if not checkpoint_contract['formal_protocol']:
+            raise M3TrainingContractError(
+                'old manual/smoke checkpoint cannot resume into formal protocol mode.'
+            )
+        current_test_ids = _validate_subject_id_list(test_subject_ids, 'test_subject_ids')
+        comparisons = (
+            ('protocol_version', protocol_version),
+            ('protocol_hash', protocol_hash),
+            ('fold_id', fold_id),
+            ('perturbation_root_seed', perturbation_root_seed),
+            ('perturbation_seed_scheme_version', perturbation_seed_scheme_version),
+        )
+        for field, expected in comparisons:
+            if payload[field] != expected:
+                raise M3TrainingContractError(
+                    f'checkpoint {field} does not match the current formal protocol.'
+                )
+        if checkpoint_contract['test_subject_ids'] != current_test_ids:
+            raise M3TrainingContractError(
+                'checkpoint test_subject_ids do not match the current formal protocol.'
+            )
+    elif checkpoint_contract['formal_protocol']:
+        raise M3TrainingContractError(
+            'formal protocol checkpoint cannot resume into manual/smoke mode.'
+        )
     if expected_training_config is not None:
         expected = _normalize_training_config(expected_training_config)
         if payload['training_config'] != expected:
@@ -829,6 +1041,7 @@ def load_checkpoint(
         'best_val_loss': float(payload['best_val_loss']),
         'seed': int(payload['seed']),
         'training_config': dict(payload['training_config']),
+        'formal_protocol': bool(checkpoint_contract['formal_protocol']),
     }
 
 
@@ -861,8 +1074,10 @@ def save_epoch_checkpoints(
 __all__ = [
     'BATCH_SIZE',
     'CHECKPOINT_VERSION',
+    'FormalSubjectSplit',
     'M3TrainingContractError',
     'PRECISION',
+    'SMOKE_CHECKPOINT_VERSION',
     'SMOKE_SPLIT_STATUS',
     'SubjectSplit',
     'TRAINING_DEFAULTS_STATUS',
@@ -872,6 +1087,7 @@ __all__ = [
     'aggregate_step_results',
     'assemble_ct_encoder_input',
     'assemble_point_encoder_input',
+    'build_formal_subject_split',
     'build_subject_split',
     'collect_trainable_parameters',
     'create_optimizer',

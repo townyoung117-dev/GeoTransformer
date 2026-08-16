@@ -1,4 +1,9 @@
-from geotransformer.modules.ops.grid_subsample import grid_subsample
+from geotransformer.modules.ops.grid_subsample import (
+    GridSubsamplingProvenanceError,
+    grid_subsample,
+    grid_subsample_with_parent,
+    validate_grid_subsampling_parent,
+)
 from geotransformer.modules.ops.index_select import index_select
 from geotransformer.modules.ops.pairwise_distance import pairwise_distance
 from geotransformer.modules.ops.pointcloud_partition import (

@@ -15,4 +15,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     &grid_subsampling,
     "Grid subsampling (CPU)"
   );
+  m.def(
+    "grid_subsampling_with_parent",
+    &grid_subsampling_with_parent,
+    "Grid subsampling with same-pass parent provenance (CPU)"
+  );
 }

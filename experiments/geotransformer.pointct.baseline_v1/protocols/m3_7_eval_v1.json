@@ -1,0 +1,31 @@
+{
+  "evaluation_protocol_version": "m3_7_eval_v1",
+  "evaluation_protocol_hash": "5c1125745765664acbdf5883d9a3e328465836b33ac32898b72e9b417b03eda6",
+  "required_training_protocol_version": "m3_6b_5fold_v1",
+  "registration_rre_threshold_deg": 5.0,
+  "registration_rte_threshold_mm": 10.0,
+  "correspondence_inlier_threshold_mm": 15.0,
+  "matching_filter_min_confidence": null,
+  "required_checkpoint_basename": "best_val_loss.pt",
+  "formal_best_checkpoints": {
+    "Fold1": {"epoch": 11, "best_val_loss": 2.187397321065267},
+    "Fold2": {"epoch": 17, "best_val_loss": 2.3390124638875327},
+    "Fold3": {"epoch": 19, "best_val_loss": 2.2600975036621094},
+    "Fold4": {"epoch": 14, "best_val_loss": 2.5588058630625405},
+    "Fold5": {"epoch": 18, "best_val_loss": 3.0356096691555448}
+  },
+  "required_formal_training": {
+    "seed": 20260815,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "batch_size": 1,
+    "precision": "fp32",
+    "temperature": 0.10,
+    "sinkhorn_iterations": 20,
+    "alpha_init": 1.0,
+    "max_epochs": 20
+  },
+  "solver_failure_metric_policy": "null_rre_rte",
+  "zero_correspondence_policy": "zero_inliers_zero_ratio_registration_fail_closed",
+  "runtime_scope": "model_forward+matching+mutual_filtering+weighted_registration"
+}

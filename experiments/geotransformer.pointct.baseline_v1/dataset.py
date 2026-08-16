@@ -35,6 +35,10 @@ class CTPreprocessingContractError(RuntimeError):
     pass
 
 
+class CTDefectAggregationContractError(RuntimeError):
+    pass
+
+
 def create_dataset(data_root=None, **kwargs):
     """Create the manifest-driven M1 dataset without defining train/val/test splits."""
     if data_root is None:
@@ -107,6 +111,117 @@ def _linear_to_indices_zyx(linear: np.ndarray, spatial_shape_zyx: np.ndarray) ->
     qy = quotient % size_y
     qz = quotient // size_y
     return np.stack((qz, qy, qx), axis=1)
+
+
+def _whole_cell_axis_ranges(axis_size: int, spacing_mm: float) -> Dict[int, Tuple[int, int]]:
+    """Map an image-axis cell index to its half-open raw-index range."""
+    raw_indices = np.arange(axis_size, dtype=np.float64)
+    cell_indices = np.floor(raw_indices * spacing_mm / CT_SUPPORT_GRID_MM).astype(np.int64)
+    unique_cells, starts, counts = np.unique(cell_indices, return_index=True, return_counts=True)
+    return {
+        int(cell): (int(start), int(start + count))
+        for cell, start, count in zip(unique_cells, starts, counts)
+    }
+
+
+def aggregate_ct_defect_whole_cells(
+    ct_defect_mask,
+    volume_shape_zyx,
+    ct_spacing,
+    ct_support_linear_20mm,
+) -> Dict[str, np.ndarray]:
+    """Aggregate intact/defect values over entire existing 20 mm image-axis cells.
+
+    The authoritative support keys determine output row order. Cell membership is
+    defined only by raw integer image indices and spacing; CT intensity, origin,
+    direction, surface support, and encoder receptive fields are not inputs.
+    """
+    shape_array = np.asarray(volume_shape_zyx)
+    if (
+        shape_array.shape != (3,)
+        or not np.issubdtype(shape_array.dtype, np.integer)
+        or np.any(shape_array <= 0)
+    ):
+        raise CTDefectAggregationContractError(
+            'volume_shape_zyx must contain three positive integer sizes in [z,y,x] order.'
+        )
+    volume_shape = tuple(int(value) for value in shape_array)
+
+    mask = np.asarray(ct_defect_mask)
+    if mask.ndim != 3 or mask.shape != volume_shape:
+        raise CTDefectAggregationContractError(
+            f'ct_defect_mask must have shape {volume_shape}; got {mask.shape}.'
+        )
+    if mask.dtype == np.bool_:
+        intact_mask = mask
+    elif mask.dtype == np.uint8:
+        if not np.all((mask == 0) | (mask == 1)):
+            raise CTDefectAggregationContractError('uint8 ct_defect_mask values must be binary {0,1}.')
+        intact_mask = mask.astype(np.bool_, copy=False)
+    else:
+        raise CTDefectAggregationContractError('ct_defect_mask dtype must be bool or uint8.')
+
+    try:
+        spacing = _require_vector(ct_spacing, 'ct_spacing', positive=True)
+        spatial_shape = _grid_spatial_shape_zyx(volume_shape, spacing, CT_SUPPORT_GRID_MM)
+    except CTPreprocessingContractError as error:
+        raise CTDefectAggregationContractError(str(error)) from error
+
+    support = np.asarray(ct_support_linear_20mm)
+    if support.ndim != 1 or support.size == 0 or not np.issubdtype(support.dtype, np.integer):
+        raise CTDefectAggregationContractError(
+            'ct_support_linear_20mm must be a non-empty one-dimensional integer array.'
+        )
+    support_linear = support.astype(np.int64, copy=False)
+    if not np.array_equal(support, support_linear):
+        raise CTDefectAggregationContractError('ct_support_linear_20mm contains values outside int64 range.')
+    # Use np.unique only as validation; its sorted output never becomes row identity.
+    if np.unique(support_linear).size != support_linear.size:
+        raise CTDefectAggregationContractError('ct_support_linear_20mm must contain unique support keys.')
+    if support_linear.size > 1 and np.any(support_linear[1:] <= support_linear[:-1]):
+        raise CTDefectAggregationContractError(
+            'ct_support_linear_20mm authoritative keys must be strictly increasing.'
+        )
+
+    total_cells = int(np.prod(spatial_shape, dtype=np.int64))
+    if np.any(support_linear < 0) or np.any(support_linear >= total_cells):
+        raise CTDefectAggregationContractError(
+            f'ct_support_linear_20mm keys must be in [0, {total_cells}).'
+        )
+    support_indices = _linear_to_indices_zyx(support_linear, spatial_shape)
+
+    z_ranges = _whole_cell_axis_ranges(volume_shape[0], spacing[2])
+    y_ranges = _whole_cell_axis_ranges(volume_shape[1], spacing[1])
+    x_ranges = _whole_cell_axis_ranges(volume_shape[2], spacing[0])
+
+    raw_total_count = np.empty(support_linear.size, dtype=np.int64)
+    raw_defect_count = np.empty(support_linear.size, dtype=np.int64)
+    for row, (qz, qy, qx) in enumerate(support_indices):
+        z_range = z_ranges.get(int(qz))
+        y_range = y_ranges.get(int(qy))
+        x_range = x_ranges.get(int(qx))
+        if z_range is None or y_range is None or x_range is None:
+            raise CTDefectAggregationContractError(
+                f'ct_support_linear_20mm[{row}]={support_linear[row]} has no existing raw voxel.'
+            )
+
+        z_start, z_stop = z_range
+        y_start, y_stop = y_range
+        x_start, x_stop = x_range
+        cell = intact_mask[z_start:z_stop, y_start:y_stop, x_start:x_stop]
+        total_count = int(cell.size)
+        defect_count = total_count - int(np.count_nonzero(cell))
+        if total_count <= 0 or defect_count < 0 or defect_count > total_count:
+            raise CTDefectAggregationContractError('Invalid whole-cell aggregation count invariant.')
+        raw_total_count[row] = total_count
+        raw_defect_count[row] = defect_count
+
+    ct_intact_coarse = raw_defect_count == 0
+    return {
+        'ct_intact_coarse': ct_intact_coarse,
+        'ct_raw_total_count_coarse': raw_total_count,
+        'ct_raw_defect_count_coarse': raw_defect_count,
+    }
 
 
 def build_ct_context_5mm(
@@ -428,8 +543,10 @@ def m2_point_collate_fn(
 
 
 __all__ = [
+    'CTDefectAggregationContractError',
     'CTPreprocessingContractError',
     'PointPreprocessingContractError',
+    'aggregate_ct_defect_whole_cells',
     'build_ct_context_5mm',
     'build_ct_support_20mm',
     'create_dataset',

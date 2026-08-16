@@ -35,6 +35,87 @@ def _shape_tuple(value, name: str):
     return shape
 
 
+def recover_x20_support_rows(x20_indices_zyx, support_shape, support_linear):
+    """Recover x20 feature rows in authoritative support order with fail-closed validation."""
+    support_shape = _shape_tuple(support_shape, 'ct_support_spatial_shape_20mm')
+    if not torch.is_tensor(x20_indices_zyx) or x20_indices_zyx.ndim != 2 or x20_indices_zyx.shape[1] != 3:
+        raise CTEncoderContractError('x20 active indices must be a torch tensor with shape [N,3].')
+    if x20_indices_zyx.dtype not in (torch.int32, torch.int64) or x20_indices_zyx.shape[0] == 0:
+        raise CTEncoderContractError('x20 active indices must be a non-empty integer tensor.')
+    limits = torch.as_tensor(support_shape, dtype=x20_indices_zyx.dtype, device=x20_indices_zyx.device)
+    if bool(torch.any(x20_indices_zyx < 0)) or bool(torch.any(x20_indices_zyx >= limits)):
+        raise CTEncoderContractError('x20 active indices contain an out-of-bounds grid index.')
+    if not torch.is_tensor(support_linear) or support_linear.ndim != 1 or support_linear.shape[0] == 0:
+        raise CTEncoderContractError('ct_support_linear_20mm must be a non-empty one-dimensional tensor.')
+    if support_linear.dtype not in (torch.int32, torch.int64):
+        raise CTEncoderContractError('ct_support_linear_20mm must use an integer dtype.')
+    if support_linear.device != x20_indices_zyx.device:
+        raise CTEncoderContractError('x20 active indices and support keys must be on the same device.')
+
+    _, size_y, size_x = support_shape
+    indices_i64 = x20_indices_zyx.to(dtype=torch.int64)
+    x20_linear = indices_i64[:, 0] * size_y * size_x + indices_i64[:, 1] * size_x + indices_i64[:, 2]
+    sorted_linear, sorted_order = torch.sort(x20_linear)
+    if sorted_linear.shape[0] > 1 and bool(torch.any(sorted_linear[1:] == sorted_linear[:-1])):
+        raise CTEncoderContractError('x20 active linear keys must be unique.')
+
+    support_linear_i64 = support_linear.to(dtype=torch.int64)
+    positions = torch.searchsorted(sorted_linear, support_linear_i64)
+    in_range = positions < sorted_linear.shape[0]
+    found = torch.zeros_like(in_range, dtype=torch.bool)
+    found[in_range] = sorted_linear[positions[in_range]] == support_linear_i64[in_range]
+    if not bool(torch.all(found)):
+        missing_linear = support_linear_i64[~found].detach().cpu().tolist()
+        raise CTEncoderContractError(
+            f'x20 is missing {len(missing_linear)} external-surface support tokens; '
+            f'first missing linear indices={missing_linear[:8]}.'
+        )
+
+    feature_rows = sorted_order[positions]
+    if not torch.equal(x20_linear[feature_rows], support_linear_i64):
+        raise CTEncoderContractError('Recovered x20 feature rows do not match authoritative support order.')
+    return feature_rows
+
+
+def validate_ct_defect_mapping(ct_dict, support_count, device):
+    fields = (
+        'ct_intact_coarse',
+        'ct_raw_total_count_coarse',
+        'ct_raw_defect_count_coarse',
+    )
+    enabled = ct_dict.get('m4_defect_mapping_enabled', False)
+    if not isinstance(enabled, bool):
+        raise CTEncoderContractError('m4_defect_mapping_enabled must be bool.')
+    present = [name for name in fields if name in ct_dict]
+    if not enabled:
+        if present:
+            raise CTEncoderContractError('CT coarse defect mapping artifacts require explicit M4 mapping enablement.')
+        return {}
+    missing = [name for name in fields if name not in ct_dict]
+    if missing:
+        raise CTEncoderContractError(f'CT M4 mapping input is missing fields: {missing}.')
+
+    intact = ct_dict['ct_intact_coarse']
+    total = ct_dict['ct_raw_total_count_coarse']
+    defect = ct_dict['ct_raw_defect_count_coarse']
+    for name, tensor, dtype in (
+        ('ct_intact_coarse', intact, torch.bool),
+        ('ct_raw_total_count_coarse', total, torch.int64),
+        ('ct_raw_defect_count_coarse', defect, torch.int64),
+    ):
+        if not torch.is_tensor(tensor) or tensor.shape != (support_count,) or tensor.dtype != dtype:
+            raise CTEncoderContractError(
+                f'{name} must have shape ({support_count},) and dtype {dtype}.'
+            )
+        if tensor.device != device:
+            raise CTEncoderContractError(f'{name} must share the authoritative CT support device.')
+    if bool(torch.any(total <= 0)) or bool(torch.any(defect < 0)) or bool(torch.any(defect > total)):
+        raise CTEncoderContractError('CT coarse defect contributor counts are invalid.')
+    if not torch.equal(intact, defect == 0):
+        raise CTEncoderContractError('ct_intact_coarse is inconsistent with raw defect counts.')
+    return {name: ct_dict[name] for name in fields}
+
+
 class CTEncoder(nn.Module):
     """Frozen Baseline V1 sparse CT encoder and external-support extractor."""
 
@@ -240,6 +321,7 @@ class CTEncoder(nn.Module):
             raise CTEncoderContractError('CT support grid indices and linear indices are inconsistent.')
         if support_count > 1 and not bool(torch.all(support_linear_i64[1:] > support_linear_i64[:-1])):
             raise CTEncoderContractError('CT support linear indices must be unique and ascending.')
+        mapping_output = validate_ct_defect_mapping(ct_dict, support_count, features.device)
 
         batch_column = torch.zeros(
             (context_indices.shape[0], 1),
@@ -281,19 +363,11 @@ class CTEncoder(nn.Module):
         if not bool(torch.all(x20.indices[:, 0] == 0)):
             raise CTEncoderContractError('M2-2 CTEncoder supports batch_size=1 only.')
 
-        x20_linear = self._linear_indices(x20.indices[:, 1:], support_shape)
-        sorted_linear, sorted_order = torch.sort(x20_linear)
-        positions = torch.searchsorted(sorted_linear, support_linear_i64)
-        in_range = positions < sorted_linear.shape[0]
-        found = torch.zeros_like(in_range, dtype=torch.bool)
-        found[in_range] = sorted_linear[positions[in_range]] == support_linear_i64[in_range]
-        if not bool(torch.all(found)):
-            missing_linear = support_linear_i64[~found].detach().cpu().tolist()
-            raise CTEncoderContractError(
-                f'x20 is missing {len(missing_linear)} external-surface support tokens; '
-                f'first missing linear indices={missing_linear[:8]}.'
-            )
-        feature_rows = sorted_order[positions]
+        feature_rows = recover_x20_support_rows(
+            x20.indices[:, 1:],
+            support_shape,
+            support_linear_i64,
+        )
         V_raw = x20.features[feature_rows]
         Xv_phys_coarse = support_phys.to(dtype=features.dtype)
         K = self.ct_proj(V_raw)
@@ -317,7 +391,7 @@ class CTEncoder(nn.Module):
                 f'Xv_phys_coarse must have shape [{support_count},3]; got {tuple(Xv_phys_coarse.shape)}.'
             )
 
-        return {
+        output = {
             'V_raw': V_raw,
             'K': K,
             'Xv_phys_coarse': Xv_phys_coarse,
@@ -326,6 +400,8 @@ class CTEncoder(nn.Module):
             'x20_active_count': int(x20.indices.shape[0]),
             'support_count': support_count,
         }
+        output.update(mapping_output)
+        return output
 
 
 def create_ct_encoder(cfg):
@@ -337,4 +413,6 @@ __all__ = [
     'CTEncoderContractError',
     'CTEncoderDependencyError',
     'create_ct_encoder',
+    'recover_x20_support_rows',
+    'validate_ct_defect_mapping',
 ]

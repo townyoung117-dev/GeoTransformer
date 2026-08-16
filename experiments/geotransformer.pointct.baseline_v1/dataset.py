@@ -39,6 +39,12 @@ class CTDefectAggregationContractError(RuntimeError):
     pass
 
 
+def _require_explicit_mapping_flag(enable_m4_defect_mapping) -> bool:
+    if not isinstance(enable_m4_defect_mapping, bool):
+        raise TypeError('enable_m4_defect_mapping must be an explicit bool.')
+    return enable_m4_defect_mapping
+
+
 def create_dataset(data_root=None, **kwargs):
     """Create the manifest-driven M1 dataset without defining train/val/test splits."""
     if data_root is None:
@@ -400,13 +406,19 @@ def build_ct_support_20mm(
     }
 
 
-def m2_ct_collate_fn(samples: List[Mapping]):
+def m2_ct_collate_fn(samples: List[Mapping], enable_m4_defect_mapping: bool = False):
     """Build M2-2 CT inputs while preserving the frozen M1 dual branches."""
+    enable_m4_defect_mapping = _require_explicit_mapping_flag(enable_m4_defect_mapping)
     if len(samples) != 1:
         raise CTPreprocessingContractError(
             f'M2-2 CT preprocessing requires batch_size=1; got {len(samples)} samples.'
         )
     sample = samples[0]
+    if enable_m4_defect_mapping:
+        if not isinstance(sample.get('defect_id'), str) or not sample['defect_id'].strip():
+            raise CTPreprocessingContractError('M4 CT mapping requires an explicit defect_id.')
+        if 'ct_defect_mask' not in sample:
+            raise CTPreprocessingContractError('M4 CT mapping requires ct_defect_mask.')
     if 'physical_unit' not in sample:
         raise CTPreprocessingContractError('M2-2 CT preprocessing requires an explicit physical_unit.')
     if 'coordinate_system' not in sample:
@@ -442,6 +454,29 @@ def m2_ct_collate_fn(samples: List[Mapping]):
     ct_branch.update(support)
     ct_branch['physical_unit'] = sample['physical_unit']
     ct_branch['coordinate_system'] = sample['coordinate_system']
+
+    if enable_m4_defect_mapping:
+        ct_mapping = aggregate_ct_defect_whole_cells(
+            ct_branch['ct_defect_mask'],
+            volume.shape,
+            spacing,
+            support['ct_support_linear_20mm'],
+        )
+        support_count = int(support['ct_support_linear_20mm'].shape[0])
+        expected_shape = (support_count,)
+        expected_dtypes = {
+            'ct_intact_coarse': np.dtype(bool),
+            'ct_raw_total_count_coarse': np.dtype(np.int64),
+            'ct_raw_defect_count_coarse': np.dtype(np.int64),
+        }
+        for name, expected_dtype in expected_dtypes.items():
+            value = ct_mapping.get(name)
+            if not isinstance(value, np.ndarray) or value.shape != expected_shape or value.dtype != expected_dtype:
+                raise CTPreprocessingContractError(
+                    f'{name} must have shape {expected_shape} and dtype {expected_dtype}.'
+                )
+        ct_branch.update(ct_mapping)
+        ct_branch['m4_defect_mapping_enabled'] = True
 
     if 'ct_metadata' in sample:
         ct_branch['ct_metadata'] = sample['ct_metadata']
@@ -488,10 +523,17 @@ def _load_single_stack_collate_fn():
     return single_collate_fn_stack_mode
 
 
+def _load_single_stack_collate_with_parent_fn():
+    from geotransformer.utils.data import single_collate_fn_stack_mode_with_parent
+
+    return single_collate_fn_stack_mode_with_parent
+
+
 def m2_point_collate_fn(
     samples: List[Mapping],
     precompute_data: bool = True,
     stack_collate_fn: Optional[Callable] = None,
+    enable_m4_defect_mapping: bool = False,
 ):
     """Build the frozen M2-1 single-cloud KPConv input without touching CT data.
 
@@ -500,12 +542,20 @@ def m2_point_collate_fn(
     single-cloud stack-mode collate. Every original Point/CT/GT/metadata field
     remains in the returned dictionary under its original physical semantics.
     """
+    enable_m4_defect_mapping = _require_explicit_mapping_flag(enable_m4_defect_mapping)
     if len(samples) != 1:
         raise PointPreprocessingContractError(
             f'M2-1 Point preprocessing requires batch_size=1; got {len(samples)} samples.'
         )
 
     sample = samples[0]
+    if enable_m4_defect_mapping:
+        if not precompute_data:
+            raise PointPreprocessingContractError('M4 Point mapping requires precompute_data=True.')
+        if not isinstance(sample.get('defect_id'), str) or not sample['defect_id'].strip():
+            raise PointPreprocessingContractError('M4 Point mapping requires an explicit defect_id.')
+        if 'point_defect_mask' not in sample:
+            raise PointPreprocessingContractError('M4 Point mapping requires point_defect_mask.')
     point_xyz_phys = _validate_point_sample(sample)
     point_xyz_net = np.multiply(
         point_xyz_phys,
@@ -515,7 +565,10 @@ def m2_point_collate_fn(
     point_features = np.ones((point_xyz_phys.shape[0], 1), dtype=np.float32)
 
     if stack_collate_fn is None:
-        stack_collate_fn = _load_single_stack_collate_fn()
+        if enable_m4_defect_mapping:
+            stack_collate_fn = _load_single_stack_collate_with_parent_fn()
+        else:
+            stack_collate_fn = _load_single_stack_collate_fn()
     point_stack = stack_collate_fn(
         [{'points': point_xyz_net, 'feats': point_features}],
         num_stages=POINT_NUM_STAGES,
@@ -524,6 +577,47 @@ def m2_point_collate_fn(
         neighbor_limits=list(POINT_NEIGHBOR_LIMITS),
         precompute_data=precompute_data,
     )
+
+    if enable_m4_defect_mapping:
+        from geotransformer.modules.ops import aggregate_point_defect_hierarchy
+
+        try:
+            import torch
+        except ModuleNotFoundError as error:
+            raise PointPreprocessingContractError('M4 Point mapping requires PyTorch.') from error
+        required_provenance = ('points', 'lengths', 'parent_indices')
+        missing = [name for name in required_provenance if name not in point_stack]
+        if missing:
+            raise PointPreprocessingContractError(
+                f'M4 Point hierarchy is missing same-pass provenance fields: {missing}.'
+            )
+        points = point_stack['points']
+        lengths = point_stack['lengths']
+        parent_indices = point_stack['parent_indices']
+        if not isinstance(points, (list, tuple)) or len(points) != POINT_NUM_STAGES:
+            raise PointPreprocessingContractError('M4 Point hierarchy must contain four actual point stages.')
+        raw_mask = torch.as_tensor(sample['point_defect_mask'], device=points[0].device)
+        point_mapping = aggregate_point_defect_hierarchy(
+            raw_mask,
+            points,
+            lengths,
+            parent_indices,
+        )
+        coarse_count = int(points[3].shape[0])
+        expected_shape = (coarse_count,)
+        expected_dtypes = {
+            'point_intact_coarse': torch.bool,
+            'point_raw_total_count_coarse': torch.int64,
+            'point_raw_defect_count_coarse': torch.int64,
+        }
+        for name, expected_dtype in expected_dtypes.items():
+            value = point_mapping.get(name)
+            if not torch.is_tensor(value) or value.shape != expected_shape or value.dtype != expected_dtype:
+                raise PointPreprocessingContractError(
+                    f'{name} must have shape {expected_shape} and dtype {expected_dtype}.'
+                )
+        point_stack.update(point_mapping)
+        point_stack['m4_defect_mapping_enabled'] = True
 
     collated = pointct_collate_fn(samples)
     point_branch = collated['point']

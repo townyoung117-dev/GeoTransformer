@@ -177,7 +177,11 @@ class CTDefectWholeCellAggregationTest(unittest.TestCase):
         self.assertNotIn('grid_mm', parameters)
 
     def test_b0_default_ct_preprocessing_does_not_call_c1_aggregation(self):
-        self.assertNotIn('aggregate_ct_defect_whole_cells', inspect.getsource(m2_ct_collate_fn))
+        signature = inspect.signature(m2_ct_collate_fn)
+        self.assertIs(signature.parameters['enable_m4_defect_mapping'].default, False)
+        collate_source = inspect.getsource(m2_ct_collate_fn)
+        self.assertIn('if enable_m4_defect_mapping:', collate_source)
+        self.assertIn('aggregate_ct_defect_whole_cells(', collate_source)
         ct_encoder_source = (EXPERIMENT_DIR / 'ct_encoder.py').read_text(encoding='utf-8')
         self.assertNotIn('aggregate_ct_defect_whole_cells', ct_encoder_source)
 

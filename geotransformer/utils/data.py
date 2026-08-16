@@ -3,7 +3,7 @@ from functools import partial
 import numpy as np
 import torch
 
-from geotransformer.modules.ops import grid_subsample, radius_search
+from geotransformer.modules.ops import grid_subsample, grid_subsample_with_parent, radius_search
 from geotransformer.utils.torch import build_dataloader
 
 
@@ -77,6 +77,86 @@ def precompute_data_stack_mode(points, lengths, num_stages, voxel_size, radius, 
     }
 
 
+def precompute_data_stack_mode_with_parent(
+    points,
+    lengths,
+    num_stages,
+    voxel_size,
+    radius,
+    neighbor_limits,
+):
+    """Build the actual KPConv hierarchy and same-pass parent provenance for M4 mapping."""
+    assert num_stages == len(neighbor_limits)
+
+    points_list = []
+    lengths_list = []
+    parent_indices_list = []
+    neighbors_list = []
+    subsampling_list = []
+    upsampling_list = []
+
+    for i in range(num_stages):
+        if i > 0:
+            points, lengths, parent_indices = grid_subsample_with_parent(
+                points,
+                lengths,
+                voxel_size=voxel_size,
+            )
+            parent_indices_list.append(parent_indices)
+        points_list.append(points)
+        lengths_list.append(lengths)
+        voxel_size *= 2
+
+    for i in range(num_stages):
+        cur_points = points_list[i]
+        cur_lengths = lengths_list[i]
+
+        neighbors = radius_search(
+            cur_points,
+            cur_points,
+            cur_lengths,
+            cur_lengths,
+            radius,
+            neighbor_limits[i],
+        )
+        neighbors_list.append(neighbors)
+
+        if i < num_stages - 1:
+            sub_points = points_list[i + 1]
+            sub_lengths = lengths_list[i + 1]
+
+            subsampling = radius_search(
+                sub_points,
+                cur_points,
+                sub_lengths,
+                cur_lengths,
+                radius,
+                neighbor_limits[i],
+            )
+            subsampling_list.append(subsampling)
+
+            upsampling = radius_search(
+                cur_points,
+                sub_points,
+                cur_lengths,
+                sub_lengths,
+                radius * 2,
+                neighbor_limits[i + 1],
+            )
+            upsampling_list.append(upsampling)
+
+        radius *= 2
+
+    return {
+        'points': points_list,
+        'lengths': lengths_list,
+        'parent_indices': parent_indices_list,
+        'neighbors': neighbors_list,
+        'subsampling': subsampling_list,
+        'upsampling': upsampling_list,
+    }
+
+
 def single_collate_fn_stack_mode(
     data_dicts, num_stages, voxel_size, search_radius, neighbor_limits, precompute_data=True
 ):
@@ -133,6 +213,40 @@ def single_collate_fn_stack_mode(
         collated_dict['lengths'] = lengths
     collated_dict['batch_size'] = batch_size
 
+    return collated_dict
+
+
+def single_collate_fn_stack_mode_with_parent(
+    data_dicts,
+    num_stages,
+    voxel_size,
+    search_radius,
+    neighbor_limits,
+    precompute_data=True,
+):
+    """Single-cloud stack collate with an explicitly enabled same-pass M4 hierarchy."""
+    if not precompute_data:
+        raise ValueError('M4 Point mapping requires precompute_data=True.')
+
+    collated_dict = single_collate_fn_stack_mode(
+        data_dicts,
+        num_stages=num_stages,
+        voxel_size=voxel_size,
+        search_radius=search_radius,
+        neighbor_limits=neighbor_limits,
+        precompute_data=False,
+    )
+    points = collated_dict.pop('points')
+    lengths = collated_dict.pop('lengths')
+    input_dict = precompute_data_stack_mode_with_parent(
+        points,
+        lengths,
+        num_stages,
+        voxel_size,
+        search_radius,
+        neighbor_limits,
+    )
+    collated_dict.update(input_dict)
     return collated_dict
 
 

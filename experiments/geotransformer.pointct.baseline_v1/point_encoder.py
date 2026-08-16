@@ -44,6 +44,47 @@ class PointEncoder(nn.Module):
         if not torch.isfinite(tensor).all():
             raise PointEncoderContractError(f'{name} contains NaN or Inf.')
 
+    @staticmethod
+    def _validate_defect_mapping(point_dict, coarse_count, device):
+        fields = (
+            'point_intact_coarse',
+            'point_raw_total_count_coarse',
+            'point_raw_defect_count_coarse',
+        )
+        enabled = point_dict.get('m4_defect_mapping_enabled', False)
+        if not isinstance(enabled, bool):
+            raise PointEncoderContractError('m4_defect_mapping_enabled must be bool.')
+        present = [name for name in fields if name in point_dict]
+        if not enabled:
+            if present:
+                raise PointEncoderContractError(
+                    'Point coarse defect mapping artifacts require explicit M4 mapping enablement.'
+                )
+            return {}
+        missing = [name for name in fields if name not in point_dict]
+        if missing:
+            raise PointEncoderContractError(f'Point M4 mapping input is missing fields: {missing}.')
+
+        intact = point_dict['point_intact_coarse']
+        total = point_dict['point_raw_total_count_coarse']
+        defect = point_dict['point_raw_defect_count_coarse']
+        for name, tensor, dtype in (
+            ('point_intact_coarse', intact, torch.bool),
+            ('point_raw_total_count_coarse', total, torch.int64),
+            ('point_raw_defect_count_coarse', defect, torch.int64),
+        ):
+            if not torch.is_tensor(tensor) or tensor.shape != (coarse_count,) or tensor.dtype != dtype:
+                raise PointEncoderContractError(
+                    f'{name} must have shape ({coarse_count},) and dtype {dtype}.'
+                )
+            if tensor.device != device:
+                raise PointEncoderContractError(f'{name} must share the actual coarse Point device.')
+        if bool(torch.any(total <= 0)) or bool(torch.any(defect < 0)) or bool(torch.any(defect > total)):
+            raise PointEncoderContractError('Point coarse defect contributor counts are invalid.')
+        if not torch.equal(intact, defect == 0):
+            raise PointEncoderContractError('point_intact_coarse is inconsistent with raw defect counts.')
+        return {name: point_dict[name] for name in fields}
+
     def forward(self, point_dict):
         """Encode only ``data_dict['point']`` from the dual-branch batch."""
         if 'features' not in point_dict:
@@ -113,12 +154,15 @@ class PointEncoder(nn.Module):
         ):
             raise PointEncoderContractError('Coarse physical/network coordinate scaling is inconsistent.')
 
-        return {
+        mapping_output = self._validate_defect_mapping(point_dict, P_raw.shape[0], P_raw.device)
+        output = {
             'P_raw': P_raw,
             'Q': Q,
             'Xp_net_coarse': Xp_net_coarse,
             'Xp_phys_coarse': Xp_phys_coarse,
         }
+        output.update(mapping_output)
+        return output
 
 
 def create_point_encoder(cfg):

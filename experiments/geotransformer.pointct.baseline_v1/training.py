@@ -344,6 +344,20 @@ def _require_fields(mapping, fields, name: str):
         raise M3TrainingContractError(f'{name} is missing fields: {missing}.')
 
 
+def _mapping_enabled(branch, artifact_fields, branch_name):
+    enabled = branch.get('m4_defect_mapping_enabled', False)
+    if not isinstance(enabled, bool):
+        raise M3TrainingContractError(f'{branch_name} m4_defect_mapping_enabled must be bool.')
+    present = [field for field in artifact_fields if field in branch]
+    if not enabled and present:
+        raise M3TrainingContractError(
+            f'{branch_name} coarse defect mapping artifacts require explicit M4 mapping enablement.'
+        )
+    if enabled:
+        _require_fields(branch, artifact_fields, f'{branch_name} M4 mapping output')
+    return enabled
+
+
 def assemble_point_encoder_input(point_branch, device):
     sequence_fields = ('points', 'neighbors', 'subsampling', 'upsampling')
     _require_fields(
@@ -363,6 +377,19 @@ def assemble_point_encoder_input(point_branch, device):
             _to_device_tensor(value, f'{field}[{index}]', device)
             for index, value in enumerate(values)
         ]
+    mapping_fields = (
+        'point_intact_coarse',
+        'point_raw_total_count_coarse',
+        'point_raw_defect_count_coarse',
+    )
+    if _mapping_enabled(point_branch, mapping_fields, 'Point'):
+        inputs['m4_defect_mapping_enabled'] = True
+        inputs.update(
+            {
+                field: _to_device_tensor(point_branch[field], field, device)
+                for field in mapping_fields
+            }
+        )
     return inputs
 
 
@@ -390,6 +417,19 @@ def assemble_ct_encoder_input(ct_branch, device):
         for field in tensor_fields
     }
     inputs.update({field: ct_branch[field] for field in metadata_fields})
+    mapping_fields = (
+        'ct_intact_coarse',
+        'ct_raw_total_count_coarse',
+        'ct_raw_defect_count_coarse',
+    )
+    if _mapping_enabled(ct_branch, mapping_fields, 'CT'):
+        inputs['m4_defect_mapping_enabled'] = True
+        inputs.update(
+            {
+                field: _to_device_tensor(ct_branch[field], field, device)
+                for field in mapping_fields
+            }
+        )
     return inputs
 
 

@@ -6,6 +6,10 @@ from geotransformer.modules.ops.grid_subsample import (
 )
 from geotransformer.modules.ops.index_select import index_select
 from geotransformer.modules.ops.pairwise_distance import pairwise_distance
+from geotransformer.modules.ops.point_defect_hierarchy import (
+    PointDefectHierarchyError,
+    aggregate_point_defect_hierarchy,
+)
 from geotransformer.modules.ops.pointcloud_partition import (
     get_point_to_node_indices,
     point_to_node_partition,

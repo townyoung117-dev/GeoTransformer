@@ -1,6 +1,6 @@
 {
   "diagnostic_protocol_version": "m3_metric_diagnostic_v1",
-  "diagnostic_protocol_hash": "0a04985332d0976cd4bd88648ba44f81e2cf288148b71732d6e8f44cb418e303",
+  "diagnostic_protocol_hash": "3807dee00a551840d5a293bbb715e40d281855a6fef375c4872b6a25fb3d016b",
   "source_training_protocol_version": "m3_6b_5fold_v1",
   "source_training_protocol_hash": "c0c635c1cb897ce33d15ba3ed58abdb12a8c5a8feb6a82fe51910146e8a99fac",
   "source_defect_evaluation_protocol_version": "m3_defect_eval_v1",
@@ -25,6 +25,8 @@
   ],
   "legacy_continuous_abs_tolerance": 1e-06,
   "legacy_continuous_rel_tolerance": 1e-07,
+  "legacy_case_authoritative_source": "strict_union_of_Fold1_through_Fold5_cases_jsonl",
+  "legacy_root_cases_policy": "optional_complete_union_or_exact_single_fold_invocation_artifact",
   "expected_patient_count": 11,
   "expected_defect_condition_count": 5,
   "expected_defect_instance_count": 55,

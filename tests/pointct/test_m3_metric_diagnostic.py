@@ -29,6 +29,7 @@ from defect_evaluation import (
 )
 from m3_metric_diagnostic import (
     DIAGNOSTIC_TRE_FIELDS,
+    EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD,
     EXPECTED_TEST_CASE_COUNT,
     M3MetricDiagnosticContractError,
     aggregate_diagnostic_cases,
@@ -43,6 +44,7 @@ from m3_metric_diagnostic import (
     summarize_confidence,
     validate_case_identity_set,
     validate_diagnostic_protocol,
+    validate_legacy_result_tree,
 )
 from training_protocol import FOLD_SUBJECTS, load_training_protocol
 
@@ -124,6 +126,47 @@ def _failure_case(index=1, *, subject_id='Pat2'):
     for field in DIAGNOSTIC_TRE_FIELDS:
         row[field] = None
     return row
+
+
+def _formal_cases_by_fold():
+    training = load_training_protocol(diagnostic_cli.DEFAULT_TRAINING_PROTOCOL)
+    evaluation = load_defect_evaluation_protocol(
+        diagnostic_cli.DEFAULT_EVALUATION_PROTOCOL
+    )
+    return {
+        fold_id: build_defect_test_manifest(
+            training,
+            evaluation,
+            fold_id,
+        )['cases']
+        for fold_id in FOLD_SUBJECTS
+    }
+
+
+def _write_jsonl(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        ''.join(json.dumps(row, sort_keys=True) + '\n' for row in rows),
+        encoding='utf-8',
+    )
+
+
+_ABSENT_ROOT = object()
+
+
+def _write_legacy_tree(
+    root,
+    cases_by_fold,
+    *,
+    root_rows=_ABSENT_ROOT,
+    per_fold_overrides=None,
+):
+    overrides = {} if per_fold_overrides is None else per_fold_overrides
+    for fold_id in FOLD_SUBJECTS:
+        rows = overrides.get(fold_id, cases_by_fold[fold_id])
+        _write_jsonl(Path(root) / fold_id / 'cases.jsonl', rows)
+    if root_rows is not _ABSENT_ROOT:
+        _write_jsonl(Path(root) / 'cases.jsonl', root_rows)
 
 
 class M3MetricMathTest(unittest.TestCase):
@@ -419,6 +462,139 @@ class M3MetricIdentityAndLegacyTest(unittest.TestCase):
             cross_check_legacy_cases([legacy], [diagnostic], expected_count=1)
 
 
+class M3LegacyResultTreeTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.cases_by_fold = _formal_cases_by_fold()
+        cls.ordered_union = [
+            row
+            for fold_id in FOLD_SUBJECTS
+            for row in cls.cases_by_fold[fold_id]
+        ]
+
+    def _validate(self, root):
+        return validate_legacy_result_tree(root, self.cases_by_fold)
+
+    def test_complete_825_root_union_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_legacy_tree(
+                directory,
+                self.cases_by_fold,
+                root_rows=self.ordered_union,
+            )
+            result = self._validate(directory)
+        self.assertEqual(
+            result['legacy_root_cases_status'],
+            'complete_union_verified',
+        )
+        self.assertEqual(result['legacy_root_cases_count'], 825)
+        self.assertIsNone(result['legacy_root_cases_detected_fold'])
+
+    def test_fold5_only_root_is_valid_single_fold_invocation_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_legacy_tree(
+                directory,
+                self.cases_by_fold,
+                root_rows=self.cases_by_fold['Fold5'],
+            )
+            result = self._validate(directory)
+        self.assertEqual(
+            result['legacy_root_cases_status'],
+            'single_fold_invocation_artifact',
+        )
+        self.assertEqual(result['legacy_root_cases_count'], 150)
+        self.assertEqual(result['legacy_root_cases_detected_fold'], 'Fold5')
+
+    def test_fold1_only_root_is_valid_single_fold_invocation_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_legacy_tree(
+                directory,
+                self.cases_by_fold,
+                root_rows=self.cases_by_fold['Fold1'],
+            )
+            result = self._validate(directory)
+        self.assertEqual(
+            result['legacy_root_cases_status'],
+            'single_fold_invocation_artifact',
+        )
+        self.assertEqual(result['legacy_root_cases_count'], 225)
+        self.assertEqual(result['legacy_root_cases_detected_fold'], 'Fold1')
+
+    def test_absent_root_passes_with_complete_per_fold_union(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_legacy_tree(directory, self.cases_by_fold)
+            result = self._validate(directory)
+        self.assertEqual(result['legacy_root_cases_status'], 'absent')
+        self.assertEqual(result['legacy_root_cases_count'], 0)
+        self.assertIsNone(result['root'])
+        self.assertIsNone(result['legacy_root_cases_detected_fold'])
+
+    def test_root_149_151_or_mixed_identities_fails_closed(self):
+        invalid_roots = {
+            '149': self.cases_by_fold['Fold5'][:-1],
+            '151': self.cases_by_fold['Fold5']
+            + [self.cases_by_fold['Fold1'][0]],
+            'mixed_150': self.cases_by_fold['Fold4'][:75]
+            + self.cases_by_fold['Fold5'][:75],
+        }
+        for label, root_rows in invalid_roots.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                _write_legacy_tree(
+                    directory,
+                    self.cases_by_fold,
+                    root_rows=root_rows,
+                )
+                with self.assertRaisesRegex(
+                    M3MetricDiagnosticContractError,
+                    'neither the complete 825-case|single-Fold',
+                ):
+                    self._validate(directory)
+
+    def test_missing_one_case_from_any_per_fold_file_fails_closed(self):
+        for fold_id in FOLD_SUBJECTS:
+            with self.subTest(fold_id=fold_id), tempfile.TemporaryDirectory() as directory:
+                _write_legacy_tree(
+                    directory,
+                    self.cases_by_fold,
+                    per_fold_overrides={
+                        fold_id: self.cases_by_fold[fold_id][:-1]
+                    },
+                )
+                with self.assertRaisesRegex(
+                    M3MetricDiagnosticContractError,
+                    f'legacy {fold_id} case count mismatch',
+                ):
+                    self._validate(directory)
+
+    def test_per_fold_union_duplicate_fails_closed(self):
+        duplicate_fold = list(self.cases_by_fold['Fold3'])
+        duplicate_fold[-1] = copy.deepcopy(duplicate_fold[0])
+        with tempfile.TemporaryDirectory() as directory:
+            _write_legacy_tree(
+                directory,
+                self.cases_by_fold,
+                per_fold_overrides={'Fold3': duplicate_fold},
+            )
+            with self.assertRaisesRegex(
+                M3MetricDiagnosticContractError,
+                'duplicate legacy Fold3 case identity',
+            ):
+                self._validate(directory)
+
+    def test_complete_per_fold_union_is_authoritative_825_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_legacy_tree(directory, self.cases_by_fold)
+            result = self._validate(directory)
+        self.assertEqual(
+            result['per_fold_counts'],
+            EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD,
+        )
+        self.assertEqual(result['per_fold_union_count'], 825)
+        self.assertEqual(result['per_fold_union_identity_audit'], 'PASS')
+        self.assertEqual(len(result['authoritative_union']), 825)
+        self.assertEqual(result['authoritative_union'], self.ordered_union)
+
+
 class M3MetricCLISafetyTest(unittest.TestCase):
     def test_no_explicit_mode_fails_before_execution(self):
         args = argparse.Namespace(audit_only=False, execute_diagnostic=False)
@@ -467,7 +643,7 @@ class M3MetricCLISafetyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             legacy_root = root / 'legacy'
-            all_rows = []
+            fold5_rows = None
             for fold_id in FOLD_SUBJECTS:
                 manifest = build_defect_test_manifest(
                     training,
@@ -475,7 +651,8 @@ class M3MetricCLISafetyTest(unittest.TestCase):
                     fold_id,
                 )
                 rows = manifest['cases']
-                all_rows.extend(rows)
+                if fold_id == 'Fold5':
+                    fold5_rows = rows
                 fold_dir = legacy_root / fold_id
                 fold_dir.mkdir(parents=True)
                 (fold_dir / 'cases.jsonl').write_text(
@@ -486,7 +663,7 @@ class M3MetricCLISafetyTest(unittest.TestCase):
                 )
             (legacy_root / 'cases.jsonl').write_text(
                 ''.join(
-                    json.dumps(row, sort_keys=True) + '\n' for row in all_rows
+                    json.dumps(row, sort_keys=True) + '\n' for row in fold5_rows
                 ),
                 encoding='utf-8',
             )
@@ -513,7 +690,21 @@ class M3MetricCLISafetyTest(unittest.TestCase):
                 result = diagnostic_cli.run_evaluation(args)
             self.assertEqual(result['mode'], 'audit-only')
             self.assertEqual(result['global_expected_case_count'], 825)
-            self.assertEqual(result['legacy_result_audit']['root_case_count'], 825)
+            self.assertEqual(
+                result['LEGACY_PER_FOLD_COUNTS'],
+                EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD,
+            )
+            self.assertEqual(result['LEGACY_PER_FOLD_UNION_COUNT'], 825)
+            self.assertEqual(
+                result['LEGACY_PER_FOLD_UNION_IDENTITY_AUDIT'],
+                'PASS',
+            )
+            self.assertEqual(
+                result['legacy_root_cases_status'],
+                'single_fold_invocation_artifact',
+            )
+            self.assertEqual(result['legacy_root_cases_count'], 150)
+            self.assertEqual(result['legacy_root_cases_detected_fold'], 'Fold5')
             self.assertFalse(result['model_loaded'])
             self.assertFalse(result['gpu_used'])
 

@@ -202,6 +202,7 @@ def run_audit_only(
     *,
     output_root,
     legacy_results_root,
+    legacy_results,
     checkpoint_root,
     json_log_root,
     fold_ids,
@@ -215,10 +216,7 @@ def run_audit_only(
         training_protocol,
         evaluation_protocol,
     )
-    legacy = validate_legacy_result_tree(
-        legacy_results_root,
-        {fold_id: manifests[fold_id]['cases'] for fold_id in FOLD_SUBJECTS},
-    )
+    legacy = legacy_results
     checkpoint_audit = None
     if checkpoint_root is not None:
         checkpoint_audit = _validate_checkpoint_roots_cpu(
@@ -240,15 +238,32 @@ def run_audit_only(
         'selected_folds': list(fold_ids),
         'selected_expected_case_count': selected_case_count,
         'global_expected_case_count': EXPECTED_TEST_CASE_COUNT,
+        'LEGACY_PER_FOLD_COUNTS': dict(legacy['per_fold_counts']),
+        'LEGACY_PER_FOLD_UNION_COUNT': legacy['per_fold_union_count'],
+        'LEGACY_PER_FOLD_UNION_IDENTITY_AUDIT': legacy[
+            'per_fold_union_identity_audit'
+        ],
+        'legacy_root_cases_status': legacy['legacy_root_cases_status'],
+        'legacy_root_cases_count': legacy['legacy_root_cases_count'],
+        'legacy_root_cases_detected_fold': legacy[
+            'legacy_root_cases_detected_fold'
+        ],
         'protocol_audit': protocol_audit,
         'legacy_result_audit': {
             'root': str(Path(legacy_results_root).resolve()),
-            'root_case_count': len(legacy['root']),
-            'per_fold_case_counts': {
-                fold_id: len(legacy['per_fold'][fold_id])
-                for fold_id in FOLD_SUBJECTS
-            },
-            'identity_audit_pass': True,
+            'legacy_case_authoritative_source': diagnostic_protocol[
+                'legacy_case_authoritative_source'
+            ],
+            'per_fold_case_counts': dict(legacy['per_fold_counts']),
+            'per_fold_union_count': legacy['per_fold_union_count'],
+            'per_fold_union_identity_audit': legacy[
+                'per_fold_union_identity_audit'
+            ],
+            'legacy_root_cases_status': legacy['legacy_root_cases_status'],
+            'legacy_root_cases_count': legacy['legacy_root_cases_count'],
+            'legacy_root_cases_detected_fold': legacy[
+                'legacy_root_cases_detected_fold'
+            ],
         },
         'checkpoint_audit': checkpoint_audit,
         'model_loaded': False,
@@ -563,11 +578,14 @@ def run_execute_diagnostic(
         checkpoint_metadata[fold_id] = metadata
         all_cases.extend(cases)
 
-    selected_legacy = [
-        row
-        for fold_id in fold_ids
-        for row in legacy_results['per_fold'][fold_id]
-    ]
+    if tuple(fold_ids) == tuple(FOLD_SUBJECTS):
+        selected_legacy = list(legacy_results['authoritative_union'])
+    else:
+        selected_legacy = [
+            row
+            for fold_id in fold_ids
+            for row in legacy_results['per_fold'][fold_id]
+        ]
     selected_expected_count = sum(
         manifests[fold_id]['total_cases'] for fold_id in fold_ids
     )
@@ -671,6 +689,7 @@ def run_evaluation(args) -> dict:
         return run_audit_only(
             output_root=output_root,
             legacy_results_root=legacy_results_root,
+            legacy_results=legacy_results,
             checkpoint_root=getattr(args, 'checkpoint_root', None),
             json_log_root=getattr(args, 'json_log_root', None),
             fold_ids=fold_ids,

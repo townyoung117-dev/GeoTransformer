@@ -33,6 +33,13 @@ EXPECTED_DEFECT_CONDITION_COUNT = 5
 EXPECTED_DEFECT_INSTANCE_COUNT = 55
 EXPECTED_TEST_CASE_COUNT = 825
 EXPECTED_PAT6_CASE_COUNT = 75
+EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD = {
+    'Fold1': 225,
+    'Fold2': 150,
+    'Fold3': 150,
+    'Fold4': 150,
+    'Fold5': 150,
+}
 SO3_ATOL = 1e-4
 HOMOGENEOUS_ATOL = 1e-12
 
@@ -104,6 +111,12 @@ _EXPECTED_DIAGNOSTIC_PROTOCOL = {
     'required_case_identity_fields': list(REQUIRED_CASE_IDENTITY_FIELDS),
     'legacy_continuous_abs_tolerance': LEGACY_CONTINUOUS_ABS_TOLERANCE,
     'legacy_continuous_rel_tolerance': LEGACY_CONTINUOUS_REL_TOLERANCE,
+    'legacy_case_authoritative_source': (
+        'strict_union_of_Fold1_through_Fold5_cases_jsonl'
+    ),
+    'legacy_root_cases_policy': (
+        'optional_complete_union_or_exact_single_fold_invocation_artifact'
+    ),
     'expected_patient_count': EXPECTED_PATIENT_COUNT,
     'expected_defect_condition_count': EXPECTED_DEFECT_CONDITION_COUNT,
     'expected_defect_instance_count': EXPECTED_DEFECT_INSTANCE_COUNT,
@@ -1070,14 +1083,19 @@ def load_jsonl(path) -> list:
 def validate_legacy_result_tree(
     legacy_results_root,
     expected_cases_by_fold: Mapping[str, Sequence[Mapping]],
-) -> Mapping[str, Sequence[Mapping]]:
-    """Validate the complete formal root and five Fold legacy JSONL files."""
+) -> Mapping[str, object]:
+    """Validate the authoritative ordered union of the five Fold JSONL files.
+
+    The root ``cases.jsonl`` is non-authoritative provenance.  It may be absent,
+    the complete union, or the exact result of one legitimate single-Fold
+    invocation.  Any other root artifact fails closed.
+    """
     root = Path(legacy_results_root)
     if not root.is_dir():
         raise M3MetricDiagnosticContractError(
             f'legacy result root does not exist: {root}.'
         )
-    expected_folds = ('Fold1', 'Fold2', 'Fold3', 'Fold4', 'Fold5')
+    expected_folds = tuple(EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD)
     if set(expected_cases_by_fold) != set(expected_folds):
         raise M3MetricDiagnosticContractError(
             'expected legacy manifest mapping must contain Fold1 through Fold5.'
@@ -1087,30 +1105,95 @@ def validate_legacy_result_tree(
     fold_all = []
     for fold_id in expected_folds:
         expected = list(expected_cases_by_fold[fold_id])
+        required_count = EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD[fold_id]
+        if len(expected) != required_count:
+            raise M3MetricDiagnosticContractError(
+                f'{fold_id} formal manifest count mismatch: '
+                f'expected={required_count}, actual={len(expected)}.'
+            )
         rows = load_jsonl(root / fold_id / 'cases.jsonl')
         validate_case_identity_set(
             rows,
             expected,
-            expected_count=len(expected),
+            expected_count=required_count,
             label=f'legacy {fold_id}',
         )
         per_fold[fold_id] = rows
         expected_all.extend(expected)
         fold_all.extend(rows)
-    root_rows = load_jsonl(root / 'cases.jsonl')
+
     validate_case_identity_set(
-        root_rows,
+        fold_all,
         expected_all,
         expected_count=EXPECTED_TEST_CASE_COUNT,
-        label='legacy root',
+        label='legacy per-fold union',
     )
-    if set(_unique_identity_map(root_rows, 'legacy root')) != set(
-        _unique_identity_map(fold_all, 'legacy Fold union')
-    ):
+    # This map call is intentionally separate from the set comparison above:
+    # it makes the no-duplicate union contract explicit and fail closed.
+    union_by_identity = _unique_identity_map(
+        fold_all,
+        'legacy per-fold union',
+    )
+    if len(union_by_identity) != EXPECTED_TEST_CASE_COUNT:
         raise M3MetricDiagnosticContractError(
-            'legacy root cases.jsonl does not equal the union of Fold JSONL files.'
+            'legacy per-fold union must contain exactly 825 unique identities.'
         )
-    return {'root': root_rows, 'per_fold': per_fold}
+
+    root_path = root / 'cases.jsonl'
+    root_rows = None
+    root_status = 'absent'
+    root_detected_fold = None
+    if root_path.exists():
+        root_rows = load_jsonl(root_path)
+        root_count = len(root_rows)
+        if root_count == EXPECTED_TEST_CASE_COUNT:
+            validate_case_identity_set(
+                root_rows,
+                fold_all,
+                expected_count=EXPECTED_TEST_CASE_COUNT,
+                label='legacy root complete union',
+            )
+            root_status = 'complete_union_verified'
+        else:
+            matching_folds = []
+            for fold_id in expected_folds:
+                required_count = EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD[fold_id]
+                if root_count != required_count:
+                    continue
+                try:
+                    validate_case_identity_set(
+                        root_rows,
+                        per_fold[fold_id],
+                        expected_count=required_count,
+                        label=f'legacy root candidate {fold_id}',
+                    )
+                except M3MetricDiagnosticContractError:
+                    continue
+                matching_folds.append(fold_id)
+            if len(matching_folds) != 1:
+                raise M3MetricDiagnosticContractError(
+                    'legacy root cases.jsonl is neither the complete 825-case '
+                    'per-fold union nor one exact formal single-Fold invocation '
+                    f'artifact; root_case_count={root_count}.'
+                )
+            root_status = 'single_fold_invocation_artifact'
+            root_detected_fold = matching_folds[0]
+    root_count = len(root_rows) if root_rows is not None else 0
+    return {
+        # The ordered Fold1..Fold5 concatenation is the only authoritative
+        # global source used by subsequent 825-case metric cross-checks.
+        'authoritative_union': fold_all,
+        'per_fold': per_fold,
+        'per_fold_counts': {
+            fold_id: len(per_fold[fold_id]) for fold_id in expected_folds
+        },
+        'per_fold_union_count': len(fold_all),
+        'per_fold_union_identity_audit': 'PASS',
+        'root': root_rows,
+        'legacy_root_cases_status': root_status,
+        'legacy_root_cases_count': root_count,
+        'legacy_root_cases_detected_fold': root_detected_fold,
+    }
 
 
 __all__ = [
@@ -1120,6 +1203,7 @@ __all__ = [
     'DIAGNOSTIC_TRE_FIELDS',
     'EXPECTED_DEFECT_CONDITION_COUNT',
     'EXPECTED_DEFECT_INSTANCE_COUNT',
+    'EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD',
     'EXPECTED_PAT6_CASE_COUNT',
     'EXPECTED_PATIENT_COUNT',
     'EXPECTED_TEST_CASE_COUNT',

@@ -1,0 +1,9 @@
+{
+  "qc_exclusion_version": "m3_clean10_qc_exclusion_v1",
+  "applies_to_training_protocol_version": "m3_6b_5fold_clean10_v2",
+  "applies_to_training_protocol_hash": "34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c",
+  "excluded_subject_ids": ["Pat6"],
+  "exclusion_stage": "before_formal_clean10_training",
+  "exclusion_basis": "manual QC confirmed a source-data quality problem",
+  "specific_anomaly_type": null
+}

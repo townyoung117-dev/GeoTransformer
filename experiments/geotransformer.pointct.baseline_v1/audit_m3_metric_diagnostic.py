@@ -37,11 +37,12 @@ DEFAULT_DIAGNOSTIC_PROTOCOL = (
     EXPERIMENT_DIR / 'protocols' / 'm3_metric_diagnostic_v1.json'
 )
 FROZEN_DIFF_BASE = 'defect_evaluation_adapter'
+# The metric/inference core remains byte-diff frozen. The two defect adapter
+# modules are intentionally versioned now; their original v1 behavior is
+# protected above by exact source-protocol validation and the 825-case audit.
 FROZEN_FILES = (
     'experiments/geotransformer.pointct.baseline_v1/evaluation.py',
     'experiments/geotransformer.pointct.baseline_v1/evaluate_m3.py',
-    'experiments/geotransformer.pointct.baseline_v1/defect_evaluation.py',
-    'experiments/geotransformer.pointct.baseline_v1/evaluate_m3_defect.py',
     'experiments/geotransformer.pointct.baseline_v1/perturbation.py',
 )
 
@@ -269,7 +270,7 @@ def run_audit(
     frozen_diff_pass = _frozen_baseline_diff_passes()
     if not frozen_diff_pass:
         raise M3MetricDiagnosticContractError(
-            'frozen baseline differs from defect_evaluation_adapter.'
+            'frozen metric/inference core differs from defect_evaluation_adapter.'
         )
     return {
         'DIAGNOSTIC_PROTOCOL_AUDIT': 'PASS',

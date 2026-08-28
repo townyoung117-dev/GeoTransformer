@@ -14,7 +14,7 @@ from defect_training import (
     build_formal_defect_split,
     create_formal_defect_dataset,
 )
-from training_protocol import FOLD_SUBJECTS, load_training_protocol
+from training_protocol import load_training_protocol
 
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent
@@ -27,10 +27,10 @@ DEFAULT_EVALUATION_PROTOCOL = (
 
 
 def run_real_dataset_audit(data_root, training_protocol) -> dict:
-    """Validate the real 55 records and every patient-level Fold expansion."""
+    """Validate real selected records and every patient-level Fold expansion."""
     dataset = create_formal_defect_dataset(data_root, training_protocol)
     folds = {}
-    for fold_id in FOLD_SUBJECTS:
+    for fold_id in training_protocol['folds']:
         split = build_formal_defect_split(dataset, training_protocol, fold_id)
         folds[fold_id] = {
             'train_instances': len(split.train_instance_ids),
@@ -48,7 +48,7 @@ def run_real_checkpoint_audit(
 ) -> dict:
     """Validate all five checkpoint payloads and all five 20-row JSONL logs."""
     folds = {}
-    for fold_id in FOLD_SUBJECTS:
+    for fold_id in training_protocol['folds']:
         checkpoint_path, jsonl_path = resolve_fold_artifacts(
             checkpoint_root,
             fold_id,
@@ -87,7 +87,11 @@ def run_audit(
     )
     result = {
         'protocol_audit_run': True,
-        'real_55_data_audit_run': data_root is not None,
+        'real_data_audit_run': data_root is not None,
+        'real_55_data_audit_run': (
+            data_root is not None
+            and training_protocol['protocol_version'] == 'm3_6b_5fold_v1'
+        ),
         'real_checkpoint_audit_run': checkpoint_root is not None,
         'protocol_audit': protocol_audit,
         'real_data_audit': None,
@@ -115,9 +119,10 @@ def _bool(value) -> str:
 def print_audit_report(result) -> None:
     audit = result['protocol_audit']
     print(f'PROTOCOL_AUDIT_RUN={_bool(result["protocol_audit_run"])}')
+    instance_count = audit['expected_test_instance_count']
     print(
-        'REAL_55_DATA_AUDIT_RUN='
-        f'{_bool(result["real_55_data_audit_run"])}'
+        f'REAL_{instance_count}_DATA_AUDIT_RUN='
+        f'{_bool(result["real_data_audit_run"])}'
     )
     print(
         'REAL_CHECKPOINT_AUDIT_RUN='
@@ -132,7 +137,7 @@ def print_audit_report(result) -> None:
         f'{audit["expected_test_instance_count"]}'
     )
     print(f'EXPECTED_TEST_CASE_COUNT={audit["expected_test_case_count"]}')
-    for fold_id in FOLD_SUBJECTS:
+    for fold_id in audit['folds']:
         fold = audit['folds'][fold_id]
         print(f'{fold_id}_TEST_INSTANCES={fold["test_instance_count"]}')
         print(f'{fold_id}_TEST_CASES={fold["test_case_count"]}')
@@ -160,7 +165,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--data-root',
         type=Path,
-        help='Optional explicit real 55-instance dataset root.',
+        help='Optional explicit real versioned defect dataset root.',
     )
     parser.add_argument(
         '--checkpoint-root',

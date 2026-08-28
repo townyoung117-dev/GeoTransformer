@@ -1,4 +1,4 @@
-"""Formal 55-instance defect dataset and patient-level split adapter.
+"""Versioned formal defect datasets and patient-level split adapter.
 
 This module deliberately leaves the complete-subject M3 baseline contract
 untouched.  Patients remain the split unit while ``(subject_id, defect_id)``
@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from training_protocol import (
-    FOLD_SUBJECTS,
     M3TrainingProtocolError,
     READY_SUBJECT_IDS,
+    SUPPORTED_PROTOCOL_VERSIONS,
+    get_training_protocol_contract,
     resolve_fold,
     validate_training_protocol,
 )
@@ -25,8 +26,10 @@ DEFECT_IDS = (
     'defect_001_right_maxilla_cheek_small',
     'defect_001_right_maxilla_cheek_medium',
 )
-READY_PATIENT_COUNT = len(READY_SUBJECT_IDS)
 DEFECT_CONDITION_COUNT = len(DEFECT_IDS)
+# Backward-compatible v1 regression aliases. Runtime values are derived from
+# the selected protocol by ``get_defect_training_contract``.
+READY_PATIENT_COUNT = len(READY_SUBJECT_IDS)
 EXPECTED_DEFECT_INSTANCE_COUNT = READY_PATIENT_COUNT * DEFECT_CONDITION_COUNT
 
 
@@ -64,38 +67,80 @@ def _validate_protocol(protocol):
     return protocol
 
 
+def get_defect_training_contract(protocol) -> dict:
+    """Derive defect counts from one fully validated training protocol."""
+    _validate_protocol(protocol)
+    training_contract = get_training_protocol_contract(protocol)
+    ready_patient_count = training_contract['patient_count']
+    return {
+        'protocol_version': training_contract['protocol_version'],
+        'protocol_hash': training_contract['protocol_hash'],
+        'ready_subject_ids': training_contract['ready_subject_ids'],
+        'excluded_subject_ids': training_contract['excluded_subject_ids'],
+        'fold_ids': tuple(training_contract['folds']),
+        'ready_patient_count': ready_patient_count,
+        'defect_condition_count': DEFECT_CONDITION_COUNT,
+        'expected_defect_instance_count': (
+            ready_patient_count * DEFECT_CONDITION_COUNT
+        ),
+    }
+
+
+def _contract_for_ready_subject_ids(subject_ids: tuple) -> dict:
+    matches = []
+    for protocol_version in SUPPORTED_PROTOCOL_VERSIONS:
+        contract = get_training_protocol_contract(protocol_version)
+        if subject_ids == contract['ready_subject_ids']:
+            matches.append(contract)
+    if len(matches) != 1:
+        supported = {
+            version: list(get_training_protocol_contract(version)['ready_subject_ids'])
+            for version in SUPPORTED_PROTOCOL_VERSIONS
+        }
+        raise DefectTrainingContractError(
+            'defect ready patients must exactly match one supported formal protocol; '
+            f'supported={supported}.'
+        )
+    return matches[0]
+
+
 def build_defect_variants(ready_subject_ids: Sequence[str]) -> tuple:
-    """Expand the frozen formal patients to 55 ordered explicit defect pairs."""
+    """Expand one supported formal patient set to ordered explicit defect pairs."""
     if isinstance(ready_subject_ids, (str, bytes)) or not isinstance(
         ready_subject_ids, Sequence
     ):
         raise DefectTrainingContractError('ready_subject_ids must be an explicit sequence.')
     subject_ids = tuple(ready_subject_ids)
-    if subject_ids != READY_SUBJECT_IDS:
-        missing = sorted(set(READY_SUBJECT_IDS).difference(subject_ids))
-        unexpected = sorted(set(subject_ids).difference(READY_SUBJECT_IDS))
-        raise DefectTrainingContractError(
-            'defect ready patients must exactly match the frozen formal protocol; '
-            f'missing={missing}, unexpected={unexpected}.'
-        )
-    if len(set(subject_ids)) != READY_PATIENT_COUNT:
+    contract = _contract_for_ready_subject_ids(subject_ids)
+    ready_patient_count = contract['patient_count']
+    expected_instance_count = ready_patient_count * DEFECT_CONDITION_COUNT
+    if len(set(subject_ids)) != ready_patient_count:
         raise DefectTrainingContractError('defect ready patients must be unique.')
     if 'Pat10' in subject_ids:
         raise DefectTrainingContractError('Pat10 must not enter formal defect training.')
+    forbidden = sorted(set(subject_ids).intersection(contract['excluded_subject_ids']))
+    if forbidden:
+        raise DefectTrainingContractError(
+            f'{contract["protocol_version"]} contains excluded patients: {forbidden}.'
+        )
 
     variants = tuple(
         (subject_id, defect_id)
         for subject_id in subject_ids
         for defect_id in DEFECT_IDS
     )
-    if len(variants) != EXPECTED_DEFECT_INSTANCE_COUNT or len(set(variants)) != len(variants):
-        raise DefectTrainingContractError('formal defect pair expansion is not exactly 55 unique pairs.')
+    if len(variants) != expected_instance_count or len(set(variants)) != len(variants):
+        raise DefectTrainingContractError(
+            f'formal defect pair expansion is not exactly {expected_instance_count} unique pairs.'
+        )
     patient_counts = Counter(subject_id for subject_id, _ in variants)
     defect_counts = Counter(defect_id for _, defect_id in variants)
     if set(patient_counts.values()) != {DEFECT_CONDITION_COUNT}:
         raise DefectTrainingContractError('every ready patient must expand to exactly five defects.')
-    if set(defect_counts.values()) != {READY_PATIENT_COUNT}:
-        raise DefectTrainingContractError('every formal defect must cover exactly 11 patients.')
+    if set(defect_counts.values()) != {ready_patient_count}:
+        raise DefectTrainingContractError(
+            f'every formal defect must cover exactly {ready_patient_count} patients.'
+        )
     return variants
 
 
@@ -113,6 +158,7 @@ def create_formal_defect_dataset(data_root, protocol, *, dataset_factory=None):
 
 def _validated_identity_to_index(dataset, protocol):
     _validate_protocol(protocol)
+    defect_contract = get_defect_training_contract(protocol)
     records = getattr(dataset, 'records', None)
     if not isinstance(records, list):
         raise DefectTrainingContractError('defect dataset must expose records as a list.')
@@ -120,6 +166,8 @@ def _validated_identity_to_index(dataset, protocol):
     expected_subjects = tuple(protocol['ready_subject_ids'])
     expected_subject_set = set(expected_subjects)
     expected_defect_set = set(DEFECT_IDS)
+    ready_patient_count = defect_contract['ready_patient_count']
+    expected_instance_count = defect_contract['expected_defect_instance_count']
     identity_to_index = {}
     subject_to_indices = {subject_id: [] for subject_id in expected_subjects}
     per_subject_defects = {subject_id: Counter() for subject_id in expected_subjects}
@@ -174,21 +222,24 @@ def _validated_identity_to_index(dataset, protocol):
         expected_counts = Counter({subject_id: 1 for subject_id in expected_subjects})
         if per_defect_subjects[defect_id] != expected_counts:
             raise DefectTrainingContractError(
-                f'defect condition {defect_id!r} must contain all 11 patients exactly once.'
+                f'defect condition {defect_id!r} must contain all '
+                f'{ready_patient_count} patients exactly once.'
             )
-    if len(identity_to_index) != EXPECTED_DEFECT_INSTANCE_COUNT:
+    if len(identity_to_index) != expected_instance_count:
         raise DefectTrainingContractError(
-            f'defect dataset must contain exactly {EXPECTED_DEFECT_INSTANCE_COUNT} instances.'
+            f'defect dataset must contain exactly {expected_instance_count} instances.'
         )
     return identity_to_index, subject_to_indices
 
 
 def validate_formal_defect_dataset(dataset, protocol):
-    """Validate the exact 11-patient by 5-defect dataset contract."""
+    """Validate the selected patient-by-five-defect dataset contract."""
+    defect_contract = get_defect_training_contract(protocol)
     _validated_identity_to_index(dataset, protocol)
-    if len(dataset) != EXPECTED_DEFECT_INSTANCE_COUNT:
+    expected_instance_count = defect_contract['expected_defect_instance_count']
+    if len(dataset) != expected_instance_count:
         raise DefectTrainingContractError(
-            f'defect dataset len must be {EXPECTED_DEFECT_INSTANCE_COUNT}; got {len(dataset)}.'
+            f'defect dataset len must be {expected_instance_count}; got {len(dataset)}.'
         )
     return dataset
 
@@ -196,6 +247,7 @@ def validate_formal_defect_dataset(dataset, protocol):
 def build_formal_defect_split(dataset, protocol, fold_id) -> FormalDefectSplit:
     """Expand one frozen patient-level fold over a validated multi-record dataset."""
     identity_to_index, _ = _validated_identity_to_index(dataset, protocol)
+    defect_contract = get_defect_training_contract(protocol)
     try:
         fold = resolve_fold(protocol, fold_id)
     except M3TrainingProtocolError as error:
@@ -212,7 +264,10 @@ def build_formal_defect_split(dataset, protocol, fold_id) -> FormalDefectSplit:
     ):
         raise DefectTrainingContractError(f'{fold_id} contains patient-level leakage.')
     if set().union(*patient_partitions) != set(protocol['ready_subject_ids']):
-        raise DefectTrainingContractError(f'{fold_id} patient union is not the 11 ready patients.')
+        raise DefectTrainingContractError(
+            f'{fold_id} patient union is not the '
+            f'{defect_contract["ready_patient_count"]} ready patients.'
+        )
 
     def expand(subject_ids):
         instance_ids = tuple(
@@ -235,13 +290,17 @@ def build_formal_defect_split(dataset, protocol, fold_id) -> FormalDefectSplit:
         raise DefectTrainingContractError(f'{fold_id} contains instance-level leakage.')
     expected_instances = set(build_defect_variants(tuple(protocol['ready_subject_ids'])))
     if set().union(*instance_partitions) != expected_instances:
-        raise DefectTrainingContractError(f'{fold_id} does not cover all 55 defect instances.')
+        raise DefectTrainingContractError(
+            f'{fold_id} does not cover all '
+            f'{defect_contract["expected_defect_instance_count"]} defect instances.'
+        )
     index_partitions = tuple(map(set, (train_indices, val_indices, test_indices)))
     if (
         index_partitions[0] & index_partitions[1]
         or index_partitions[0] & index_partitions[2]
         or index_partitions[1] & index_partitions[2]
-        or set().union(*index_partitions) != set(range(EXPECTED_DEFECT_INSTANCE_COUNT))
+        or set().union(*index_partitions)
+        != set(range(defect_contract['expected_defect_instance_count']))
     ):
         raise DefectTrainingContractError(f'{fold_id} dataset-index partition is not exact.')
 
@@ -286,10 +345,10 @@ def build_split_provenance(split: FormalDefectSplit) -> dict:
 
 
 def expected_fold_instance_counts(protocol) -> dict:
-    """Derive train/val/test instance counts from the frozen patient protocol."""
+    """Derive train/val/test instance counts from the selected patient protocol."""
     _validate_protocol(protocol)
     counts = {}
-    for fold_id in FOLD_SUBJECTS:
+    for fold_id in protocol['folds']:
         fold = resolve_fold(protocol, fold_id)
         counts[fold_id] = tuple(
             len(fold[field]) * DEFECT_CONDITION_COUNT
@@ -310,5 +369,6 @@ __all__ = [
     'build_split_provenance',
     'create_formal_defect_dataset',
     'expected_fold_instance_counts',
+    'get_defect_training_contract',
     'validate_formal_defect_dataset',
 ]

@@ -1,4 +1,4 @@
-"""Versioned M3-6B-2 five-fold training protocol contract."""
+"""Versioned M3-6B-2 five-fold training protocol contracts."""
 
 import hashlib
 import hmac
@@ -10,6 +10,9 @@ from typing import Mapping, Sequence
 
 
 PROTOCOL_VERSION = 'm3_6b_5fold_v1'
+PROTOCOL_HASH = 'c0c635c1cb897ce33d15ba3ed58abdb12a8c5a8feb6a82fe51910146e8a99fac'
+CLEAN10_PROTOCOL_VERSION = 'm3_6b_5fold_clean10_v2'
+CLEAN10_PROTOCOL_HASH = '34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c'
 SEED_SCHEME_VERSION = 'm3_6b_seed_v1'
 PERTURBATION_ROOT_SEED = 20260815
 COORDINATE_SYSTEM = 'LPS'
@@ -64,6 +67,95 @@ FOLD_SUBJECTS = {
     },
 }
 
+CLEAN10_READY_SUBJECT_IDS = (
+    'Pat1',
+    'Pat2',
+    'Pat3',
+    'Pat4',
+    'Pat5',
+    'Pat7',
+    'Pat8',
+    'Pat9',
+    'Pat11',
+    'Pat12',
+)
+CLEAN10_SUBJECT_GROUPS = {
+    'G1': ('Pat12', 'Pat5'),
+    'G2': ('Pat7', 'Pat4'),
+    'G3': ('Pat11', 'Pat3'),
+    'G4': ('Pat8', 'Pat9'),
+    'G5': ('Pat1', 'Pat2'),
+}
+CLEAN10_FOLD_SUBJECTS = {
+    'Fold1': {
+        'test_subject_ids': CLEAN10_SUBJECT_GROUPS['G1'],
+        'val_subject_ids': CLEAN10_SUBJECT_GROUPS['G2'],
+        'train_subject_ids': (
+            CLEAN10_SUBJECT_GROUPS['G3']
+            + CLEAN10_SUBJECT_GROUPS['G4']
+            + CLEAN10_SUBJECT_GROUPS['G5']
+        ),
+    },
+    'Fold2': {
+        'test_subject_ids': CLEAN10_SUBJECT_GROUPS['G2'],
+        'val_subject_ids': CLEAN10_SUBJECT_GROUPS['G3'],
+        'train_subject_ids': (
+            CLEAN10_SUBJECT_GROUPS['G1']
+            + CLEAN10_SUBJECT_GROUPS['G4']
+            + CLEAN10_SUBJECT_GROUPS['G5']
+        ),
+    },
+    'Fold3': {
+        'test_subject_ids': CLEAN10_SUBJECT_GROUPS['G3'],
+        'val_subject_ids': CLEAN10_SUBJECT_GROUPS['G4'],
+        'train_subject_ids': (
+            CLEAN10_SUBJECT_GROUPS['G1']
+            + CLEAN10_SUBJECT_GROUPS['G2']
+            + CLEAN10_SUBJECT_GROUPS['G5']
+        ),
+    },
+    'Fold4': {
+        'test_subject_ids': CLEAN10_SUBJECT_GROUPS['G4'],
+        'val_subject_ids': CLEAN10_SUBJECT_GROUPS['G5'],
+        'train_subject_ids': (
+            CLEAN10_SUBJECT_GROUPS['G1']
+            + CLEAN10_SUBJECT_GROUPS['G2']
+            + CLEAN10_SUBJECT_GROUPS['G3']
+        ),
+    },
+    'Fold5': {
+        'test_subject_ids': CLEAN10_SUBJECT_GROUPS['G5'],
+        'val_subject_ids': CLEAN10_SUBJECT_GROUPS['G1'],
+        'train_subject_ids': (
+            CLEAN10_SUBJECT_GROUPS['G2']
+            + CLEAN10_SUBJECT_GROUPS['G3']
+            + CLEAN10_SUBJECT_GROUPS['G4']
+        ),
+    },
+}
+
+# The original public constants above intentionally remain v1 aliases.  Runtime
+# validation and adapters select one of these exact contracts by manifest version.
+_PROTOCOL_CONTRACTS = {
+    PROTOCOL_VERSION: {
+        'protocol_version': PROTOCOL_VERSION,
+        'protocol_hash': PROTOCOL_HASH,
+        'ready_subject_ids': READY_SUBJECT_IDS,
+        'groups': SUBJECT_GROUPS,
+        'folds': FOLD_SUBJECTS,
+        'excluded_subject_ids': (),
+    },
+    CLEAN10_PROTOCOL_VERSION: {
+        'protocol_version': CLEAN10_PROTOCOL_VERSION,
+        'protocol_hash': CLEAN10_PROTOCOL_HASH,
+        'ready_subject_ids': CLEAN10_READY_SUBJECT_IDS,
+        'groups': CLEAN10_SUBJECT_GROUPS,
+        'folds': CLEAN10_FOLD_SUBJECTS,
+        'excluded_subject_ids': ('Pat6',),
+    },
+}
+SUPPORTED_PROTOCOL_VERSIONS = tuple(_PROTOCOL_CONTRACTS)
+
 _TOP_LEVEL_FIELDS = {
     'protocol_version',
     'protocol_hash',
@@ -97,6 +189,43 @@ _EXPECTED_VALIDATION_BOUNDS = {
 
 class M3TrainingProtocolError(ValueError):
     pass
+
+
+def _contract_for_version(protocol_version: str) -> Mapping:
+    if not isinstance(protocol_version, str) or protocol_version not in _PROTOCOL_CONTRACTS:
+        raise M3TrainingProtocolError(
+            f'unsupported protocol_version {protocol_version!r}; '
+            f'expected one of {list(SUPPORTED_PROTOCOL_VERSIONS)}.'
+        )
+    return _PROTOCOL_CONTRACTS[protocol_version]
+
+
+def get_training_protocol_contract(protocol_or_version) -> dict:
+    """Return a defensive copy of one supported versioned training contract."""
+    if isinstance(protocol_or_version, Mapping):
+        validate_training_protocol(protocol_or_version)
+        protocol_version = protocol_or_version['protocol_version']
+    else:
+        protocol_version = protocol_or_version
+    contract = _contract_for_version(protocol_version)
+    return {
+        'protocol_version': contract['protocol_version'],
+        'protocol_hash': contract['protocol_hash'],
+        'ready_subject_ids': tuple(contract['ready_subject_ids']),
+        'groups': {
+            group_id: tuple(subject_ids)
+            for group_id, subject_ids in contract['groups'].items()
+        },
+        'folds': {
+            fold_id: {
+                split_name: tuple(subject_ids)
+                for split_name, subject_ids in fold.items()
+            }
+            for fold_id, fold in contract['folds'].items()
+        },
+        'excluded_subject_ids': tuple(contract['excluded_subject_ids']),
+        'patient_count': len(contract['ready_subject_ids']),
+    }
 
 
 def _require_exact_fields(value, expected, name: str):
@@ -199,17 +328,27 @@ def _validate_perturbation_spec(
         raise M3TrainingProtocolError(f'{name} epoch_policy must be {epoch_policy!r}.')
 
 
-def _validate_subject_contract(protocol):
+def _validate_subject_contract(protocol, contract):
     ready = _require_subject_ids(protocol['ready_subject_ids'], 'ready_subject_ids')
-    if ready != READY_SUBJECT_IDS:
-        raise M3TrainingProtocolError('ready_subject_ids do not match m3_6b_5fold_v1.')
+    expected_ready = tuple(contract['ready_subject_ids'])
+    protocol_version = contract['protocol_version']
+    if ready != expected_ready:
+        raise M3TrainingProtocolError(
+            f'ready_subject_ids do not match {protocol_version}.'
+        )
     if 'Pat10' in ready:
         raise M3TrainingProtocolError('Pat10 is not ready and must not enter the protocol.')
+    forbidden = sorted(set(ready).intersection(contract['excluded_subject_ids']))
+    if forbidden:
+        raise M3TrainingProtocolError(
+            f'{protocol_version} contains excluded subjects: {forbidden}.'
+        )
 
     groups = protocol['groups']
-    _require_exact_fields(groups, set(SUBJECT_GROUPS), 'groups')
+    expected_groups = contract['groups']
+    _require_exact_fields(groups, set(expected_groups), 'groups')
     group_subjects = []
-    for group_id, expected_subjects in SUBJECT_GROUPS.items():
+    for group_id, expected_subjects in expected_groups.items():
         subjects = _require_subject_ids(groups[group_id], f'groups.{group_id}')
         if subjects != expected_subjects:
             raise M3TrainingProtocolError(f'groups.{group_id} does not match the formal protocol.')
@@ -218,11 +357,13 @@ def _validate_subject_contract(protocol):
         raise M3TrainingProtocolError('group subject union must equal ready_subject_ids exactly once.')
 
     folds = protocol['folds']
-    _require_exact_fields(folds, set(FOLD_SUBJECTS), 'folds')
+    expected_folds = contract['folds']
+    _require_exact_fields(folds, set(expected_folds), 'folds')
+    training_counts = Counter()
     validation_counts = Counter()
     test_counts = Counter()
     ready_set = set(ready)
-    for fold_id, expected_fold in FOLD_SUBJECTS.items():
+    for fold_id, expected_fold in expected_folds.items():
         fold = folds[fold_id]
         _require_exact_fields(fold, _FOLD_FIELDS, f'folds.{fold_id}')
         resolved = {}
@@ -247,6 +388,7 @@ def _validate_subject_contract(protocol):
             raise M3TrainingProtocolError(
                 f'folds.{fold_id} split union must equal ready_subject_ids.'
             )
+        training_counts.update(resolved['train_subject_ids'])
         validation_counts.update(resolved['val_subject_ids'])
         test_counts.update(resolved['test_subject_ids'])
     expected_counts = Counter({subject_id: 1 for subject_id in ready})
@@ -254,6 +396,9 @@ def _validate_subject_contract(protocol):
         raise M3TrainingProtocolError('every ready subject must validate exactly once across folds.')
     if test_counts != expected_counts:
         raise M3TrainingProtocolError('every ready subject must test exactly once across folds.')
+    expected_training_counts = Counter({subject_id: 3 for subject_id in ready})
+    if training_counts != expected_training_counts:
+        raise M3TrainingProtocolError('every ready subject must train exactly three times across folds.')
 
 
 def _validate_perturbation_contract(protocol):
@@ -293,8 +438,9 @@ def _validate_perturbation_contract(protocol):
 
 
 def validate_training_protocol(protocol, *, verify_hash: bool = True):
-    """Fail closed on any deviation from the formal M3-6B-2 protocol."""
+    """Fail closed on any deviation from a supported M3-6B-2 protocol."""
     _require_exact_fields(protocol, _TOP_LEVEL_FIELDS, 'protocol')
+    contract = _contract_for_version(protocol['protocol_version'])
     protocol_hash = protocol['protocol_hash']
     if (
         not isinstance(protocol_hash, str)
@@ -308,8 +454,13 @@ def validate_training_protocol(protocol, *, verify_hash: bool = True):
             raise M3TrainingProtocolError(
                 f'protocol_hash mismatch: stored={protocol_hash}, computed={computed_hash}.'
             )
+    if not hmac.compare_digest(protocol_hash, contract['protocol_hash']):
+        raise M3TrainingProtocolError(
+            f'protocol_hash is not the frozen hash for {contract["protocol_version"]}: '
+            f'stored={protocol_hash}, expected={contract["protocol_hash"]}.'
+        )
     expected_scalars = {
-        'protocol_version': PROTOCOL_VERSION,
+        'protocol_version': contract['protocol_version'],
         'seed_scheme_version': SEED_SCHEME_VERSION,
         'perturbation_root_seed': PERTURBATION_ROOT_SEED,
         'coordinate_system': COORDINATE_SYSTEM,
@@ -319,9 +470,9 @@ def validate_training_protocol(protocol, *, verify_hash: bool = True):
     for field, expected in expected_scalars.items():
         if protocol[field] != expected or type(protocol[field]) is not type(expected):
             raise M3TrainingProtocolError(
-                f'{field} must be exactly {expected!r} for {PROTOCOL_VERSION}.'
+                f'{field} must be exactly {expected!r} for {contract["protocol_version"]}.'
             )
-    _validate_subject_contract(protocol)
+    _validate_subject_contract(protocol, contract)
     _validate_perturbation_contract(protocol)
     return protocol
 
@@ -351,9 +502,11 @@ def load_training_protocol(path):
 
 def resolve_fold(protocol, fold_id):
     validate_training_protocol(protocol)
-    if not isinstance(fold_id, str) or fold_id not in FOLD_SUBJECTS:
+    contract = _contract_for_version(protocol['protocol_version'])
+    fold_subjects = contract['folds']
+    if not isinstance(fold_id, str) or fold_id not in fold_subjects:
         raise M3TrainingProtocolError(
-            f'unknown fold_id {fold_id!r}; expected one of {list(FOLD_SUBJECTS)}.'
+            f'unknown fold_id {fold_id!r}; expected one of {list(fold_subjects)}.'
         )
     fold = protocol['folds'][fold_id]
     return {
@@ -394,17 +547,25 @@ def validate_dataset_ready_subjects(protocol, actual_subject_ids):
 
 
 __all__ = [
+    'CLEAN10_FOLD_SUBJECTS',
+    'CLEAN10_PROTOCOL_HASH',
+    'CLEAN10_PROTOCOL_VERSION',
+    'CLEAN10_READY_SUBJECT_IDS',
+    'CLEAN10_SUBJECT_GROUPS',
     'COORDINATE_SYSTEM',
     'FOLD_SUBJECTS',
     'M3TrainingProtocolError',
     'PERTURBATION_ROOT_SEED',
     'PHYSICAL_UNIT',
+    'PROTOCOL_HASH',
     'PROTOCOL_VERSION',
     'READY_SUBJECT_IDS',
     'SEED_SCHEME_VERSION',
     'SUBJECT_GROUPS',
+    'SUPPORTED_PROTOCOL_VERSIONS',
     'TRANSFORM_DIRECTION',
     'compute_protocol_hash',
+    'get_training_protocol_contract',
     'load_training_protocol',
     'resolve_fold',
     'test_perturbation_specs',

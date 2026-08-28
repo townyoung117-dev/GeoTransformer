@@ -1,4 +1,4 @@
-"""Formal PointCT training entry for 11 patients x 5 defect conditions.
+"""Versioned formal PointCT training entry for five defect conditions.
 
 The existing ``train_m3`` loop is reused through a narrow in-process adapter so
 the frozen complete-subject entry and its formal split function remain
@@ -149,7 +149,7 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
 
 
 def run_defect_training(args):
-    """Run the reused M3 loop over the formal 55-record defect dataset."""
+    """Run the reused M3 loop over the selected formal defect dataset."""
     protocol = load_training_protocol(args.protocol_manifest)
     enabled = getattr(args, 'enable_m4_defect_mapping', False)
     if not isinstance(enabled, bool):
@@ -164,7 +164,7 @@ def run_defect_training(args):
 
 def build_argument_parser():
     parser = argparse.ArgumentParser(
-        description='Formal patient-level PointCT training over 55 explicit defect instances.'
+        description='Versioned formal patient-level PointCT defect training.'
     )
     parser.add_argument('--data-root', type=Path, required=True)
     parser.add_argument('--protocol-manifest', type=Path, required=True)

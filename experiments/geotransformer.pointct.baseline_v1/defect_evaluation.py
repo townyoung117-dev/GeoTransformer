@@ -21,11 +21,11 @@ from defect_training import (
     EXPECTED_DEFECT_INSTANCE_COUNT,
     READY_PATIENT_COUNT,
     build_defect_variants,
+    get_defect_training_contract,
 )
 from evaluation import M3EvaluationContractError, aggregate_case_metrics
 from perturbation import derive_perturbation_seed, sample_rigid_perturbation
 from training_protocol import (
-    FOLD_SUBJECTS,
     resolve_fold,
     test_perturbation_specs,
     validate_training_protocol,
@@ -33,7 +33,15 @@ from training_protocol import (
 
 
 DEFECT_EVALUATION_PROTOCOL_VERSION = 'm3_defect_eval_v1'
+DEFECT_EVALUATION_PROTOCOL_HASH = (
+    '66b93d340a79947295ba1b75738291001192b9848f3cc48a8144492915fd49fe'
+)
+CLEAN10_DEFECT_EVALUATION_PROTOCOL_VERSION = 'm3_defect_eval_clean10_v2'
+CLEAN10_DEFECT_EVALUATION_PROTOCOL_HASH = (
+    'cfd519b923be3b623cffec8c8f5830cb5b1160859461180eddeb7134a0adb6b0'
+)
 DEFECT_TEST_MANIFEST_VERSION = 'm3_defect_test_manifest_v1'
+CLEAN10_DEFECT_TEST_MANIFEST_VERSION = 'm3_defect_test_manifest_clean10_v2'
 REQUIRED_TRAINING_PROTOCOL_VERSION = 'm3_6b_5fold_v1'
 REQUIRED_TRAINING_PROTOCOL_HASH = (
     'c0c635c1cb897ce33d15ba3ed58abdb12a8c5a8feb6a82fe51910146e8a99fac'
@@ -118,11 +126,43 @@ _EXPECTED_EVALUATION_PROTOCOL = {
         'model_forward+matching+mutual_filtering+weighted_registration'
     ),
 }
+_CLEAN10_EXPECTED_EVALUATION_PROTOCOL = {
+    **_EXPECTED_EVALUATION_PROTOCOL,
+    'evaluation_protocol_version': CLEAN10_DEFECT_EVALUATION_PROTOCOL_VERSION,
+    'required_training_protocol_version': 'm3_6b_5fold_clean10_v2',
+    'required_training_protocol_hash': (
+        '34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c'
+    ),
+    'test_perturbation_source': 'm3_6b_5fold_clean10_v2.test_perturbations',
+}
+_EVALUATION_PROTOCOL_CONTRACTS = {
+    DEFECT_EVALUATION_PROTOCOL_VERSION: {
+        'evaluation_protocol_hash': DEFECT_EVALUATION_PROTOCOL_HASH,
+        'test_manifest_version': DEFECT_TEST_MANIFEST_VERSION,
+        'expected': _EXPECTED_EVALUATION_PROTOCOL,
+    },
+    CLEAN10_DEFECT_EVALUATION_PROTOCOL_VERSION: {
+        'evaluation_protocol_hash': CLEAN10_DEFECT_EVALUATION_PROTOCOL_HASH,
+        'test_manifest_version': CLEAN10_DEFECT_TEST_MANIFEST_VERSION,
+        'expected': _CLEAN10_EXPECTED_EVALUATION_PROTOCOL,
+    },
+}
 _BEST_VAL_LOSS_ABS_TOLERANCE = 1e-12
 
 
 class DefectEvaluationContractError(M3EvaluationContractError):
     """Raised when the formal M3 defect evaluation contract is violated."""
+
+
+def _evaluation_contract_for_version(evaluation_protocol_version: str) -> Mapping:
+    try:
+        return _EVALUATION_PROTOCOL_CONTRACTS[evaluation_protocol_version]
+    except (KeyError, TypeError) as error:
+        raise DefectEvaluationContractError(
+            f'unsupported evaluation_protocol_version '
+            f'{evaluation_protocol_version!r}; expected one of '
+            f'{list(_EVALUATION_PROTOCOL_CONTRACTS)}.'
+        ) from error
 
 
 def _reject_duplicate_json_fields(pairs):
@@ -164,7 +204,7 @@ def compute_defect_evaluation_protocol_hash(protocol: Mapping) -> str:
 
 
 def validate_defect_evaluation_protocol(protocol: Mapping) -> Mapping:
-    """Fail closed on any deviation from the frozen defect evaluation manifest."""
+    """Fail closed on any deviation from a versioned evaluation manifest."""
     if not isinstance(protocol, Mapping):
         raise DefectEvaluationContractError(
             'defect evaluation protocol must be a JSON object.'
@@ -177,6 +217,9 @@ def validate_defect_evaluation_protocol(protocol: Mapping) -> Mapping:
             'defect evaluation protocol fields mismatch; '
             f'missing={missing}, unexpected={unexpected}.'
         )
+    contract = _evaluation_contract_for_version(
+        protocol['evaluation_protocol_version']
+    )
     stored_hash = protocol['evaluation_protocol_hash']
     if (
         not isinstance(stored_hash, str)
@@ -192,12 +235,21 @@ def validate_defect_evaluation_protocol(protocol: Mapping) -> Mapping:
             'evaluation_protocol_hash mismatch: '
             f'stored={stored_hash}, computed={computed_hash}.'
         )
-    for field, expected in _EXPECTED_EVALUATION_PROTOCOL.items():
+    if not hmac.compare_digest(
+        stored_hash,
+        contract['evaluation_protocol_hash'],
+    ):
+        raise DefectEvaluationContractError(
+            'evaluation_protocol_hash is not the frozen hash for '
+            f'{protocol["evaluation_protocol_version"]}: stored={stored_hash}, '
+            f'expected={contract["evaluation_protocol_hash"]}.'
+        )
+    for field, expected in contract['expected'].items():
         actual = protocol[field]
         if actual != expected or type(actual) is not type(expected):
             raise DefectEvaluationContractError(
                 f'{field} must be exactly {expected!r} for '
-                f'{DEFECT_EVALUATION_PROTOCOL_VERSION}.'
+                f'{protocol["evaluation_protocol_version"]}.'
             )
     return protocol
 
@@ -255,6 +307,9 @@ def _generate_defect_test_manifest(
     fold_id: str,
 ) -> dict:
     validate_protocol_pair(training_protocol, evaluation_protocol)
+    evaluation_contract = _evaluation_contract_for_version(
+        evaluation_protocol['evaluation_protocol_version']
+    )
     fold = resolve_fold(training_protocol, fold_id)
     specs = test_perturbation_specs(training_protocol)
     cases = []
@@ -369,7 +424,7 @@ def _generate_defect_test_manifest(
                 )
 
     return {
-        'test_manifest_version': DEFECT_TEST_MANIFEST_VERSION,
+        'test_manifest_version': evaluation_contract['test_manifest_version'],
         'protocol_version': training_protocol['protocol_version'],
         'protocol_hash': training_protocol['protocol_hash'],
         'evaluation_protocol_version': evaluation_protocol[
@@ -465,7 +520,8 @@ def validate_expanded_partitions(
         )
     if set().union(*partition_sets) != expected_instances:
         raise DefectEvaluationContractError(
-            f'{fold_id} does not cover all 55 formal defect instances.'
+            f'{fold_id} does not cover all {len(expected_instances)} '
+            'formal defect instances.'
         )
     for partition in partitions:
         by_subject = defaultdict(set)
@@ -480,13 +536,16 @@ def validate_expanded_partitions(
 def run_protocol_audit(training_protocol, evaluation_protocol) -> dict:
     """Audit all five Fold expansions without reading data or checkpoints."""
     validate_protocol_pair(training_protocol, evaluation_protocol)
+    defect_contract = get_defect_training_contract(training_protocol)
+    expected_instance_count = defect_contract['expected_defect_instance_count']
+    expected_test_case_count = expected_instance_count * CASES_PER_DEFECT_INSTANCE
     fold_results = {}
     global_instances = []
     global_case_keys = []
     test_patient_counts = Counter()
     subject_to_test_fold = {}
 
-    for fold_id in FOLD_SUBJECTS:
+    for fold_id in defect_contract['fold_ids']:
         fold = resolve_fold(training_protocol, fold_id)
 
         def expand(field):
@@ -533,13 +592,21 @@ def run_protocol_audit(training_protocol, evaluation_protocol) -> dict:
         raise DefectEvaluationContractError(
             'every ready patient must test exactly once across all Folds.'
         )
-    if len(global_instances) != EXPECTED_DEFECT_INSTANCE_COUNT or len(set(global_instances)) != len(global_instances):
+    if (
+        len(global_instances) != expected_instance_count
+        or len(set(global_instances)) != len(global_instances)
+    ):
         raise DefectEvaluationContractError(
-            'global test subject-defect pairs are not exactly 55 unique instances.'
+            'global test subject-defect pairs are not exactly '
+            f'{expected_instance_count} unique instances.'
         )
-    if len(global_case_keys) != EXPECTED_TEST_CASE_COUNT or len(set(global_case_keys)) != len(global_case_keys):
+    if (
+        len(global_case_keys) != expected_test_case_count
+        or len(set(global_case_keys)) != len(global_case_keys)
+    ):
         raise DefectEvaluationContractError(
-            'global defect test cases are not exactly 825 unique cases.'
+            'global defect test cases are not exactly '
+            f'{expected_test_case_count} unique cases.'
         )
     return {
         'protocol_version': training_protocol['protocol_version'],
@@ -550,7 +617,7 @@ def run_protocol_audit(training_protocol, evaluation_protocol) -> dict:
         'evaluation_protocol_hash': evaluation_protocol[
             'evaluation_protocol_hash'
         ],
-        'ready_patient_count': READY_PATIENT_COUNT,
+        'ready_patient_count': defect_contract['ready_patient_count'],
         'defect_condition_count': DEFECT_CONDITION_COUNT,
         'expected_test_instance_count': len(global_instances),
         'expected_test_case_count': len(global_case_keys),
@@ -729,7 +796,8 @@ def validate_defect_checkpoint_metadata(
     if actual_provenance != expected_provenance:
         raise DefectEvaluationContractError(
             'checkpoint defect_training_provenance does not match the formal '
-            '55-instance defect adapter; old complete-subject checkpoints are not accepted.'
+            f'{get_defect_training_contract(training_protocol)["expected_defect_instance_count"]}'
+            '-instance defect adapter; old complete-subject checkpoints are not accepted.'
         )
     return {
         'fold_id': fold_id,
@@ -920,7 +988,7 @@ def resolve_fold_artifacts(
 ) -> tuple:
     """Resolve the fixed checkpoint and JSONL locations for one Fold."""
     validate_defect_evaluation_protocol(evaluation_protocol)
-    if fold_id not in FOLD_SUBJECTS:
+    if fold_id not in ('Fold1', 'Fold2', 'Fold3', 'Fold4', 'Fold5'):
         raise DefectEvaluationContractError(f'unknown fold_id {fold_id!r}.')
     checkpoint_root = Path(checkpoint_root)
     log_root = checkpoint_root if json_log_root is None else Path(json_log_root)
@@ -1008,6 +1076,10 @@ def aggregate_defect_case_metrics(cases: Sequence[Mapping]) -> dict:
 
 __all__ = [
     'CASES_PER_DEFECT_INSTANCE',
+    'CLEAN10_DEFECT_EVALUATION_PROTOCOL_HASH',
+    'CLEAN10_DEFECT_EVALUATION_PROTOCOL_VERSION',
+    'CLEAN10_DEFECT_TEST_MANIFEST_VERSION',
+    'DEFECT_EVALUATION_PROTOCOL_HASH',
     'DEFECT_EVALUATION_PROTOCOL_VERSION',
     'DEFECT_TEST_MANIFEST_VERSION',
     'DefectEvaluationContractError',

@@ -33,7 +33,12 @@ DEFAULT_EVALUATION_PROTOCOL = (
 )
 
 
-def _selected_fold_ids(args) -> tuple:
+def _selected_fold_ids(args, training_protocol=None) -> tuple:
+    fold_subjects = (
+        FOLD_SUBJECTS
+        if training_protocol is None
+        else training_protocol['folds']
+    )
     all_folds = bool(getattr(args, 'all_folds', False))
     fold_id = getattr(args, 'fold_id', None)
     if all_folds == (fold_id is not None):
@@ -41,10 +46,10 @@ def _selected_fold_ids(args) -> tuple:
             'choose exactly one Fold selector: --fold-id or --all-folds.'
         )
     if all_folds:
-        return tuple(FOLD_SUBJECTS)
-    if fold_id not in FOLD_SUBJECTS:
+        return tuple(fold_subjects)
+    if fold_id not in fold_subjects:
         raise DefectEvaluationContractError(
-            f'unknown fold_id {fold_id!r}; expected one of {list(FOLD_SUBJECTS)}.'
+            f'unknown fold_id {fold_id!r}; expected one of {list(fold_subjects)}.'
         )
     return (fold_id,)
 
@@ -98,7 +103,7 @@ def _evaluate_defect_test_case(
 
 
 def _create_defect_dataset_for_execution(data_root, training_protocol):
-    """Create the real 55-instance dataset only in explicit execution mode."""
+    """Create the selected defect dataset only in explicit execution mode."""
     return create_formal_defect_dataset(data_root, training_protocol)
 
 
@@ -306,8 +311,8 @@ def run_evaluation(args) -> dict:
             'explicitly choose exactly one mode: --manifest-only or '
             '--execute-test. Real evaluation is disabled by default.'
         )
-    fold_ids = _selected_fold_ids(args)
     training_protocol = load_training_protocol(args.protocol_manifest)
+    fold_ids = _selected_fold_ids(args, training_protocol)
     evaluation_protocol = load_defect_evaluation_protocol(
         args.evaluation_protocol
     )
@@ -338,7 +343,7 @@ def run_evaluation(args) -> dict:
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description='Formal patient-level M3 defect baseline evaluation.'
+        description='Versioned formal patient-level M3 defect baseline evaluation.'
     )
     parser.add_argument('--data-root', type=Path, default=DEFAULT_DATA_ROOT)
     parser.add_argument('--protocol-manifest', type=Path, required=True)

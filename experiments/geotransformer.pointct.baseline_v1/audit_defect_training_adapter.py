@@ -1,4 +1,4 @@
-"""CPU/static audit for the formal 55-instance defect-training adapter."""
+"""CPU/static audit for versioned formal defect-training adapters."""
 
 import argparse
 import json
@@ -14,16 +14,15 @@ if str(PROJECT_ROOT) not in sys.path:
 from defect_training import (
     DEFECT_CONDITION_COUNT,
     DEFECT_IDS,
-    EXPECTED_DEFECT_INSTANCE_COUNT,
-    READY_PATIENT_COUNT,
     DefectTrainingContractError,
     build_defect_variants,
     build_formal_defect_split,
     create_formal_defect_dataset,
     expected_fold_instance_counts,
+    get_defect_training_contract,
 )
 from geotransformer.datasets.registration.pointct.dataset import DEFECT_ARTIFACT_FILENAMES
-from training_protocol import FOLD_SUBJECTS, load_training_protocol
+from training_protocol import load_training_protocol
 
 
 EXPECTED_FOLD_INSTANCE_COUNTS = {
@@ -32,6 +31,14 @@ EXPECTED_FOLD_INSTANCE_COUNTS = {
     'Fold3': (35, 10, 10),
     'Fold4': (35, 10, 10),
     'Fold5': (30, 15, 10),
+}
+CLEAN10_EXPECTED_FOLD_INSTANCE_COUNTS = {
+    fold_id: (30, 10, 10)
+    for fold_id in ('Fold1', 'Fold2', 'Fold3', 'Fold4', 'Fold5')
+}
+EXPECTED_FOLD_INSTANCE_COUNTS_BY_PROTOCOL = {
+    'm3_6b_5fold_v1': EXPECTED_FOLD_INSTANCE_COUNTS,
+    'm3_6b_5fold_clean10_v2': CLEAN10_EXPECTED_FOLD_INSTANCE_COUNTS,
 }
 
 
@@ -48,6 +55,7 @@ class _StaticDataset:
 
 
 def run_static_protocol_audit(protocol):
+    defect_contract = get_defect_training_contract(protocol)
     variants = build_defect_variants(tuple(protocol['ready_subject_ids']))
     records = [
         {'subject_id': subject_id, 'defect_id': defect_id}
@@ -57,7 +65,10 @@ def run_static_protocol_audit(protocol):
     patient_counts = Counter(subject_id for subject_id, _ in variants)
     defect_counts = Counter(defect_id for _, defect_id in variants)
     fold_counts = expected_fold_instance_counts(protocol)
-    if fold_counts != EXPECTED_FOLD_INSTANCE_COUNTS:
+    expected_fold_counts = EXPECTED_FOLD_INSTANCE_COUNTS_BY_PROTOCOL[
+        protocol['protocol_version']
+    ]
+    if fold_counts != expected_fold_counts:
         raise DefectTrainingAuditError(
             f'fold instance regression mismatch: {fold_counts!r}.'
         )
@@ -65,7 +76,7 @@ def run_static_protocol_audit(protocol):
     validation_patient_counts = Counter()
     test_patient_counts = Counter()
     fold_splits = {}
-    for fold_id in FOLD_SUBJECTS:
+    for fold_id in protocol['folds']:
         split = build_formal_defect_split(dataset, protocol, fold_id)
         validation_patient_counts.update(split.val_subject_ids)
         test_patient_counts.update(split.test_subject_ids)
@@ -93,12 +104,14 @@ def run_static_protocol_audit(protocol):
             'every patient must appear in validation once and test once across five folds.'
         )
     return {
+        'protocol_version': protocol['protocol_version'],
         'ready_patient_count': len(patient_counts),
         'defect_condition_count': len(defect_counts),
         'expected_instance_count': len(variants),
         'pair_uniqueness_pass': len(set(variants)) == len(variants),
         'per_patient_pass': set(patient_counts.values()) == {DEFECT_CONDITION_COUNT},
-        'per_condition_pass': set(defect_counts.values()) == {READY_PATIENT_COUNT},
+        'per_condition_pass': set(defect_counts.values())
+        == {defect_contract['ready_patient_count']},
         'patient_leakage_pass': True,
         'instance_leakage_pass': True,
         'fold_counts': fold_counts,
@@ -118,7 +131,8 @@ def _load_manifest(path):
 
 
 def detect_complete_real_defect_data(data_root, protocol):
-    """Cheaply detect all 55 core artifact sets without reading medical arrays."""
+    """Detect all selected core artifact sets without reading medical arrays."""
+    defect_contract = get_defect_training_contract(protocol)
     data_root = Path(data_root).expanduser().resolve()
     manifest_path = data_root / 'dataset_manifest.json'
     if not manifest_path.is_file():
@@ -137,7 +151,12 @@ def detect_complete_real_defect_data(data_root, protocol):
 
     expected_subjects = set(protocol['ready_subject_ids'])
     actual_subjects = set(ready_by_subject)
-    unexpected = sorted(actual_subjects.difference(expected_subjects))
+    allowed_source_only_subjects = set(defect_contract['excluded_subject_ids'])
+    unexpected = sorted(
+        actual_subjects.difference(expected_subjects).difference(
+            allowed_source_only_subjects
+        )
+    )
     if unexpected:
         raise DefectTrainingAuditError(
             f'ready manifest contains forbidden/unknown patients: {unexpected}.'
@@ -173,17 +192,33 @@ def detect_complete_real_defect_data(data_root, protocol):
             if not artifact.is_file():
                 missing_artifacts.append(artifact)
     if missing_artifacts:
-        return False, f'{len(missing_artifacts)} of 275 required defect artifact files are absent'
-    return True, 'all 55 defect core artifact sets are present'
+        required_artifact_count = (
+            defect_contract['expected_defect_instance_count']
+            * len(DEFECT_ARTIFACT_FILENAMES)
+        )
+        return (
+            False,
+            f'{len(missing_artifacts)} of {required_artifact_count} required '
+            'defect artifact files are absent',
+        )
+    return (
+        True,
+        f'all {defect_contract["expected_defect_instance_count"]} '
+        'defect core artifact sets are present',
+    )
 
 
 def run_real_data_audit(data_root, protocol):
+    defect_contract = get_defect_training_contract(protocol)
     dataset = create_formal_defect_dataset(data_root, protocol)
-    if len(dataset) != EXPECTED_DEFECT_INSTANCE_COUNT:
-        raise DefectTrainingContractError('real defect dataset does not contain exactly 55 records.')
+    if len(dataset) != defect_contract['expected_defect_instance_count']:
+        raise DefectTrainingContractError(
+            'real defect dataset does not contain exactly '
+            f'{defect_contract["expected_defect_instance_count"]} records.'
+        )
     splits = {
         fold_id: build_formal_defect_split(dataset, protocol, fold_id)
-        for fold_id in FOLD_SUBJECTS
+        for fold_id in protocol['folds']
     }
     return {'dataset': dataset, 'splits': splits}
 
@@ -207,7 +242,7 @@ def _pass(value):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description='Audit the PointCT 55-instance patient-level defect adapter on CPU.'
+        description='Audit a versioned PointCT patient-level defect adapter on CPU.'
     )
     parser.add_argument('--data-root', type=Path, required=True)
     parser.add_argument('--protocol-manifest', type=Path, required=True)
@@ -219,13 +254,23 @@ def main(argv=None):
     print(f'EXPECTED_INSTANCE_COUNT={static["expected_instance_count"]}')
     print(f'PAIR_UNIQUENESS={_pass(static["pair_uniqueness_pass"])}')
     print(f'PER_PATIENT_5_CONDITIONS={_pass(static["per_patient_pass"])}')
-    print(f'PER_CONDITION_11_PATIENTS={_pass(static["per_condition_pass"])}')
+    if static['protocol_version'] == 'm3_6b_5fold_v1':
+        print(f'PER_CONDITION_11_PATIENTS={_pass(static["per_condition_pass"])}')
+    else:
+        print(
+            f'PER_CONDITION_{static["ready_patient_count"]}_PATIENTS='
+            f'{_pass(static["per_condition_pass"])}'
+        )
     print(f'PATIENT_LEVEL_LEAKAGE={_pass(static["patient_leakage_pass"])}')
     print(f'INSTANCE_LEVEL_LEAKAGE={_pass(static["instance_leakage_pass"])}')
     for fold_id, counts in static['fold_counts'].items():
         print(f'{fold_id.upper()}_TRAIN_VAL_TEST_INSTANCE_COUNT={counts[0]}/{counts[1]}/{counts[2]}')
-    print(f'REAL_55_DATA_AUDIT_RUN={str(result["real_data_audit_run"]).lower()}')
-    print(f'REAL_55_DATA_AUDIT_REASON={result["real_data_reason"]}')
+    instance_count = static['expected_instance_count']
+    print(
+        f'REAL_{instance_count}_DATA_AUDIT_RUN='
+        f'{str(result["real_data_audit_run"]).lower()}'
+    )
+    print(f'REAL_{instance_count}_DATA_AUDIT_REASON={result["real_data_reason"]}')
 
 
 if __name__ == '__main__':

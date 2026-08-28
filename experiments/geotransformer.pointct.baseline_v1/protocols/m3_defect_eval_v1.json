@@ -1,0 +1,39 @@
+{
+  "evaluation_protocol_version": "m3_defect_eval_v1",
+  "evaluation_protocol_hash": "66b93d340a79947295ba1b75738291001192b9848f3cc48a8144492915fd49fe",
+  "source_evaluation_protocol_version": "m3_7_eval_v1",
+  "source_evaluation_protocol_hash": "5c1125745765664acbdf5883d9a3e328465836b33ac32898b72e9b417b03eda6",
+  "required_training_protocol_version": "m3_6b_5fold_v1",
+  "required_training_protocol_hash": "c0c635c1cb897ce33d15ba3ed58abdb12a8c5a8feb6a82fe51910146e8a99fac",
+  "test_perturbation_source": "m3_6b_5fold_v1.test_perturbations",
+  "perturbation_seed_source": "m3_6b_seed_v1.subject_based_without_defect_id",
+  "registration_rre_threshold_deg": 5.0,
+  "registration_rte_threshold_mm": 10.0,
+  "correspondence_inlier_threshold_mm": 15.0,
+  "matching_filter_min_confidence": null,
+  "required_checkpoint_basename": "best_val_loss.pt",
+  "required_formal_training": {
+    "seed": 20260815,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "batch_size": 1,
+    "precision": "fp32",
+    "temperature": 0.10,
+    "sinkhorn_iterations": 20,
+    "alpha_init": 1.0,
+    "max_epochs": 20
+  },
+  "required_defect_training_adapter": "pointct_defect_training_v1",
+  "required_defect_ids": [
+    "defect_001_left_maxilla_cheek_small",
+    "defect_001_left_maxilla_cheek_medium",
+    "defect_001_left_maxilla_cheek_large",
+    "defect_001_right_maxilla_cheek_small",
+    "defect_001_right_maxilla_cheek_medium"
+  ],
+  "required_enable_m4_defect_mapping": false,
+  "required_epoch_count": 20,
+  "solver_failure_metric_policy": "null_rre_rte",
+  "zero_correspondence_policy": "zero_inliers_zero_ratio_registration_fail_closed",
+  "runtime_scope": "model_forward+matching+mutual_filtering+weighted_registration"
+}

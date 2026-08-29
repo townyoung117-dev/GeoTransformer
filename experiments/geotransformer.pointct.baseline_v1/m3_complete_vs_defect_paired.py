@@ -298,12 +298,19 @@ def validate_source_protocols(
         )
 
 
-def audit_complete_dataset(dataset, training_protocol: Mapping) -> dict:
-    """Audit the real default complete-subject dataset without loading samples."""
+def _complete_dataset_selection(
+    dataset,
+    training_protocol: Mapping,
+) -> tuple:
+    """Validate raw complete records and resolve the protocol-selected indices."""
     try:
-        from training_protocol import validate_training_protocol
+        from training_protocol import (
+            get_training_protocol_contract,
+            validate_training_protocol,
+        )
 
         validate_training_protocol(training_protocol)
+        training_contract = get_training_protocol_contract(training_protocol)
     except Exception as error:
         raise M3CompleteVsDefectPairedContractError(
             f'clean10 training protocol validation failed: {error}'
@@ -321,13 +328,21 @@ def audit_complete_dataset(dataset, training_protocol: Mapping) -> dict:
         raise M3CompleteVsDefectPairedContractError(
             'complete dataset must expose manifest records as a list.'
         )
-    if len(records) != COMPLETE_INSTANCE_COUNT:
+    selected_subject_ids = tuple(training_protocol['ready_subject_ids'])
+    excluded_subject_ids = tuple(training_contract['excluded_subject_ids'])
+    if len(selected_subject_ids) != COMPLETE_INSTANCE_COUNT:
         raise M3CompleteVsDefectPairedContractError(
-            'complete instance count mismatch: '
-            f'expected={COMPLETE_INSTANCE_COUNT}, actual={len(records)}.'
+            'selected clean10 complete instance count mismatch: '
+            f'expected={COMPLETE_INSTANCE_COUNT}, '
+            f'actual={len(selected_subject_ids)}.'
         )
-    subject_ids = []
-    for record in records:
+    if set(selected_subject_ids).intersection(excluded_subject_ids):
+        raise M3CompleteVsDefectPairedContractError(
+            'training protocol selected/excluded subject sets overlap.'
+        )
+    raw_subject_ids = []
+    raw_subject_to_index = {}
+    for index, record in enumerate(records):
         if not isinstance(record, Mapping):
             raise M3CompleteVsDefectPairedContractError(
                 'complete dataset records must be mappings.'
@@ -347,41 +362,104 @@ def audit_complete_dataset(dataset, training_protocol: Mapping) -> dict:
                 raise M3CompleteVsDefectPairedContractError(
                     f'complete dataset record requires non-empty {field}.'
                 )
-        subject_ids.append(subject_id)
-    duplicates = sorted(
-        subject_id
-        for subject_id, count in Counter(subject_ids).items()
-        if count > 1
+        if subject_id in raw_subject_to_index:
+            raise M3CompleteVsDefectPairedContractError(
+                'complete dataset contains duplicate patients: '
+                f'{[subject_id]}.'
+            )
+        raw_subject_to_index[subject_id] = index
+        raw_subject_ids.append(subject_id)
+    selected_set = set(selected_subject_ids)
+    raw_set = set(raw_subject_ids)
+    missing = sorted(selected_set.difference(raw_set))
+    if missing:
+        raise M3CompleteVsDefectPairedContractError(
+            'raw complete dataset is missing selected clean10 patients: '
+            f'{missing}.'
+        )
+    raw_extra = raw_set.difference(selected_set)
+    unknown_extra = sorted(raw_extra.difference(excluded_subject_ids))
+    if unknown_extra:
+        raise M3CompleteVsDefectPairedContractError(
+            'raw complete dataset contains ready patients not selected or '
+            f'explicitly excluded by the training protocol: {unknown_extra}.'
+        )
+    selected_subject_to_index = {
+        subject_id: raw_subject_to_index[subject_id]
+        for subject_id in selected_subject_ids
+    }
+    if set(selected_subject_to_index) != selected_set:
+        raise M3CompleteVsDefectPairedContractError(
+            'selected complete subject mapping keys mismatch clean10 protocol.'
+        )
+    if (
+        len(selected_subject_to_index) != COMPLETE_INSTANCE_COUNT
+        or len(set(selected_subject_to_index.values())) != COMPLETE_INSTANCE_COUNT
+    ):
+        raise M3CompleteVsDefectPairedContractError(
+            'selected complete subject mapping must contain 10 unique indices.'
+        )
+    return (
+        records,
+        raw_subject_ids,
+        selected_subject_ids,
+        excluded_subject_ids,
+        selected_subject_to_index,
     )
-    if duplicates:
+
+
+def build_clean10_complete_subject_index(
+    dataset,
+    training_protocol: Mapping,
+) -> dict:
+    """Map exactly the frozen clean10 subjects to unique raw dataset indices."""
+    selection = _complete_dataset_selection(dataset, training_protocol)
+    return dict(selection[4])
+
+
+def audit_complete_dataset(dataset, training_protocol: Mapping) -> dict:
+    """Report raw historical records separately from clean10 selection."""
+    (
+        records,
+        raw_subject_ids,
+        selected_subject_ids,
+        excluded_subject_ids,
+        selected_subject_to_index,
+    ) = _complete_dataset_selection(dataset, training_protocol)
+    raw_excluded_present = [
+        subject_id
+        for subject_id in excluded_subject_ids
+        if subject_id in set(raw_subject_ids)
+    ]
+    pat6_raw_count = raw_subject_ids.count('Pat6')
+    pat6_selected_count = selected_subject_ids.count('Pat6')
+    pat10_selected_count = selected_subject_ids.count('Pat10')
+    if pat6_selected_count or pat10_selected_count:
         raise M3CompleteVsDefectPairedContractError(
-            f'complete dataset contains duplicate patients: {duplicates}.'
-        )
-    if set(subject_ids) != set(ALLOWED_SUBJECT_IDS):
-        missing = sorted(set(ALLOWED_SUBJECT_IDS).difference(subject_ids))
-        unexpected = sorted(set(subject_ids).difference(ALLOWED_SUBJECT_IDS))
-        raise M3CompleteVsDefectPairedContractError(
-            'complete dataset patient mismatch; '
-            f'missing={missing}, unexpected={unexpected}.'
-        )
-    pat6_count = subject_ids.count('Pat6')
-    pat10_count = subject_ids.count('Pat10')
-    if pat6_count or pat10_count:
-        raise M3CompleteVsDefectPairedContractError(
-            f'complete dataset exclusions violated: Pat6={pat6_count}, '
-            f'Pat10={pat10_count}.'
+            'selected clean10 subjects contain excluded Pat6 or Pat10.'
         )
     return {
         'dataset_mode': 'complete_without_defect_variants',
-        'patient_count': len(subject_ids),
-        'complete_instance_count': len(records),
-        'subject_ids': sorted(subject_ids),
+        'selection_source': 'frozen_clean10_training_protocol',
+        'raw_ready_patient_count': len(records),
+        'raw_ready_subject_ids': list(raw_subject_ids),
+        'selected_patient_count': len(selected_subject_ids),
+        'selected_complete_instance_count': len(selected_subject_to_index),
+        'selected_subject_ids': list(selected_subject_ids),
+        'raw_excluded_subject_ids_present': raw_excluded_present,
+        'pat6_raw_count': pat6_raw_count,
+        'pat6_selected_count': pat6_selected_count,
+        'pat10_selected_count': pat10_selected_count,
+        # Backward-compatible aliases now explicitly describe selection, not
+        # the historical raw ready-record count.
+        'patient_count': len(selected_subject_ids),
+        'complete_instance_count': len(selected_subject_to_index),
+        'subject_ids': list(selected_subject_ids),
         'instances_per_patient': {
-            subject_id: subject_ids.count(subject_id)
-            for subject_id in sorted(subject_ids)
+            subject_id: 1 for subject_id in selected_subject_ids
         },
-        'pat6_count': pat6_count,
-        'pat10_count': pat10_count,
+        'pat6_count': pat6_selected_count,
+        'pat10_count': pat10_selected_count,
         'defect_masks_consumed': False,
     }
 
@@ -1012,6 +1090,7 @@ __all__ = [
     'PATIENT_COUNT',
     'aggregate_complete_cases',
     'audit_complete_dataset',
+    'build_clean10_complete_subject_index',
     'build_complete_manifest',
     'build_paired_comparison',
     'compute_paired_protocol_hash',

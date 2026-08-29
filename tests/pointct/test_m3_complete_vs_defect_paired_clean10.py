@@ -38,6 +38,7 @@ from m3_complete_vs_defect_paired import (
     PAIRED_PROTOCOL_HASH,
     PAIRED_PROTOCOL_VERSION,
     audit_complete_dataset,
+    build_clean10_complete_subject_index,
     build_complete_manifest,
     build_paired_comparison,
     compute_paired_protocol_hash,
@@ -254,21 +255,75 @@ class M3CompleteVsDefectPairedClean10Test(unittest.TestCase):
             OBSERVATION_PROTOCOL_HASH,
         )
 
-    def test_complete_dataset_contract_is_exactly_ten_instances(self):
+    def test_raw_exact_clean10_selects_exactly_ten_instances(self):
         audit = audit_complete_dataset(self._dataset(), self.training)
+        self.assertEqual(audit['raw_ready_patient_count'], 10)
+        self.assertEqual(audit['selected_patient_count'], 10)
+        self.assertEqual(audit['selected_complete_instance_count'], 10)
         self.assertEqual(audit['patient_count'], 10)
         self.assertEqual(audit['complete_instance_count'], COMPLETE_INSTANCE_COUNT)
         self.assertEqual(set(audit['subject_ids']), set(ALLOWED_SUBJECT_IDS))
         self.assertEqual(set(audit['instances_per_patient'].values()), {1})
         self.assertFalse(audit['defect_masks_consumed'])
 
-    def test_complete_dataset_pat6_pat10_and_defect_mode_fail_closed(self):
-        invalid_subjects = list(ALLOWED_SUBJECT_IDS[:-1]) + ['Pat6']
+    def test_raw_clean10_plus_excluded_pat6_passes_but_never_selects_pat6(self):
+        raw_subjects = list(ALLOWED_SUBJECT_IDS) + ['Pat6']
+        dataset = self._dataset(raw_subjects)
+        audit = audit_complete_dataset(dataset, self.training)
+        selected = build_clean10_complete_subject_index(dataset, self.training)
+        self.assertEqual(audit['raw_ready_patient_count'], 11)
+        self.assertEqual(audit['raw_ready_subject_ids'], raw_subjects)
+        self.assertEqual(audit['selected_patient_count'], 10)
+        self.assertEqual(audit['selected_complete_instance_count'], 10)
+        self.assertEqual(audit['raw_excluded_subject_ids_present'], ['Pat6'])
+        self.assertEqual(audit['pat6_raw_count'], 1)
+        self.assertEqual(audit['pat6_selected_count'], 0)
+        self.assertEqual(audit['pat10_selected_count'], 0)
+        self.assertNotIn('Pat6', selected)
+        self.assertNotIn(raw_subjects.index('Pat6'), selected.values())
+
+    def test_missing_clean10_patient_fails_closed(self):
         with self.assertRaisesRegex(
             M3CompleteVsDefectPairedContractError,
-            'patient mismatch',
+            'missing selected clean10 patients',
         ):
-            audit_complete_dataset(self._dataset(invalid_subjects), self.training)
+            audit_complete_dataset(
+                self._dataset(ALLOWED_SUBJECT_IDS[:-1]),
+                self.training,
+            )
+
+    def test_duplicate_clean10_patient_fails_closed(self):
+        duplicate = list(ALLOWED_SUBJECT_IDS) + [ALLOWED_SUBJECT_IDS[0]]
+        with self.assertRaisesRegex(
+            M3CompleteVsDefectPairedContractError,
+            'duplicate patients',
+        ):
+            audit_complete_dataset(self._dataset(duplicate), self.training)
+
+    def test_unknown_raw_extra_patient_fails_closed(self):
+        unknown = list(ALLOWED_SUBJECT_IDS) + ['Pat10']
+        with self.assertRaisesRegex(
+            M3CompleteVsDefectPairedContractError,
+            'not selected or explicitly excluded',
+        ):
+            audit_complete_dataset(self._dataset(unknown), self.training)
+
+    def test_selected_subject_index_keys_and_values_are_exact_and_unique(self):
+        dataset = self._dataset(list(ALLOWED_SUBJECT_IDS) + ['Pat6'])
+        selected = build_clean10_complete_subject_index(dataset, self.training)
+        self.assertEqual(tuple(selected), ALLOWED_SUBJECT_IDS)
+        self.assertEqual(len(selected), 10)
+        self.assertEqual(len(set(selected.values())), 10)
+        self.assertTrue(
+            all(
+                dataset.records[index]['subject_id'] == subject_id
+                for subject_id, index in selected.items()
+            )
+        )
+        self.assertNotIn('Pat6', selected)
+        self.assertNotIn('Pat10', selected)
+
+    def test_complete_dataset_defect_mode_fails_closed(self):
         invalid = self._dataset()
         invalid.defect_enabled = True
         with self.assertRaisesRegex(
@@ -468,6 +523,8 @@ class M3CompleteVsDefectPairedClean10Test(unittest.TestCase):
 
     def test_execute_uses_default_complete_dataset_call_without_defect_variants(self):
         complete, _ = self._inputs()
+        raw_subjects = list(ALLOWED_SUBJECT_IDS) + ['Pat6']
+        raw_dataset = self._dataset(raw_subjects)
         by_fold = {
             fold_id: [row for row in complete if row['fold_id'] == fold_id]
             for fold_id in self.training['folds']
@@ -475,6 +532,10 @@ class M3CompleteVsDefectPairedClean10Test(unittest.TestCase):
 
         def fake_fold(**kwargs):
             fold_id = kwargs['fold_id']
+            selected = kwargs['selected_subject_to_index']
+            self.assertEqual(tuple(selected), ALLOWED_SUBJECT_IDS)
+            self.assertNotIn('Pat6', selected)
+            self.assertNotIn(raw_subjects.index('Pat6'), selected.values())
             return by_fold[fold_id], {
                 'epoch': 20,
                 'best_val_loss': 0.1,
@@ -485,7 +546,7 @@ class M3CompleteVsDefectPairedClean10Test(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             paired_cli,
             'create_dataset',
-            return_value=self._dataset(),
+            return_value=raw_dataset,
         ) as create_mock, mock.patch.object(
             paired_cli,
             'resolve_fold_artifacts',
@@ -512,6 +573,18 @@ class M3CompleteVsDefectPairedClean10Test(unittest.TestCase):
             create_mock.assert_called_once_with(Path('complete-data'))
             self.assertTrue((Path(directory) / 'complete_cases_150.jsonl').is_file())
             self.assertTrue((Path(directory) / 'complete_manifest.json').is_file())
+            provenance = json.loads(
+                (Path(directory) / 'provenance.json').read_text(encoding='utf-8')
+            )
+            self.assertEqual(provenance['raw_ready_patient_count'], 11)
+            self.assertEqual(provenance['selected_patient_count'], 10)
+            self.assertEqual(
+                provenance['raw_excluded_subject_ids_present'], ['Pat6']
+            )
+            self.assertEqual(
+                provenance['selection_source'],
+                'frozen_clean10_training_protocol',
+            )
         self.assertEqual(summary['case_count'], 150)
 
     def test_old_v1_v2_v3_protocols_are_zero_regression(self):

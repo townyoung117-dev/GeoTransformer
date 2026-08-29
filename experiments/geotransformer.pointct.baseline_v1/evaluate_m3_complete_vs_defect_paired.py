@@ -29,6 +29,7 @@ from m3_complete_vs_defect_paired import (
     M3CompleteVsDefectPairedContractError,
     aggregate_complete_cases,
     audit_complete_dataset,
+    build_clean10_complete_subject_index,
     build_complete_manifest,
     build_paired_comparison,
     load_paired_protocol,
@@ -296,6 +297,7 @@ def _evaluate_complete_case(
 def _execute_complete_fold(
     *,
     dataset,
+    selected_subject_to_index,
     checkpoint_path,
     jsonl_path,
     device_name,
@@ -324,19 +326,43 @@ def _execute_complete_fold(
             device,
         )
     )
-    subject_to_index = {
-        record['subject_id']: index for index, record in enumerate(dataset.records)
-    }
-    if len(subject_to_index) != len(dataset.records):
+    if not isinstance(selected_subject_to_index, Mapping):
         raise M3CompleteVsDefectPairedContractError(
-            'complete dataset subject mapping is not unique.'
+            'selected complete subject-to-index mapping must be a mapping.'
+        )
+    expected_subjects = tuple(training_protocol['ready_subject_ids'])
+    if set(selected_subject_to_index) != set(expected_subjects):
+        raise M3CompleteVsDefectPairedContractError(
+            'selected complete subject-to-index keys do not match clean10.'
+        )
+    selected_indices = []
+    for subject_id in expected_subjects:
+        dataset_index = selected_subject_to_index[subject_id]
+        if (
+            isinstance(dataset_index, bool)
+            or not isinstance(dataset_index, (int, np.integer))
+            or int(dataset_index) < 0
+            or int(dataset_index) >= len(dataset.records)
+        ):
+            raise M3CompleteVsDefectPairedContractError(
+                f'selected dataset index is invalid for {subject_id!r}.'
+            )
+        dataset_index = int(dataset_index)
+        if dataset.records[dataset_index].get('subject_id') != subject_id:
+            raise M3CompleteVsDefectPairedContractError(
+                f'selected dataset index does not resolve {subject_id!r}.'
+            )
+        selected_indices.append(dataset_index)
+    if len(set(selected_indices)) != len(expected_subjects):
+        raise M3CompleteVsDefectPairedContractError(
+            'selected complete subject-to-index values must be unique.'
         )
     cases = []
     with torch.no_grad():
         for manifest_case in complete_manifest_cases:
             subject_id = manifest_case['subject_id']
             try:
-                dataset_index = subject_to_index[subject_id]
+                dataset_index = selected_subject_to_index[subject_id]
             except KeyError as error:
                 raise M3CompleteVsDefectPairedContractError(
                     f'{fold_id} complete patient is absent: {subject_id!r}.'
@@ -375,6 +401,10 @@ def run_execute_complete(
     # defect_variants argument is supplied.
     dataset = create_dataset(data_root)
     dataset_audit = audit_complete_dataset(dataset, training_protocol)
+    selected_subject_to_index = build_clean10_complete_subject_index(
+        dataset,
+        training_protocol,
+    )
     all_cases = []
     checkpoint_provenance = {}
     for fold_id in FOLD_IDS:
@@ -386,6 +416,7 @@ def run_execute_complete(
         )
         cases, metadata = _execute_complete_fold(
             dataset=dataset,
+            selected_subject_to_index=selected_subject_to_index,
             checkpoint_path=checkpoint_path,
             jsonl_path=jsonl_path,
             device_name=device_name,
@@ -436,6 +467,18 @@ def run_execute_complete(
         'paired_protocol_version': paired_protocol['paired_protocol_version'],
         'paired_protocol_hash': paired_protocol['paired_protocol_hash'],
         'source_code_commit': paired_protocol['source_code_commit'],
+        'raw_ready_patient_count': dataset_audit['raw_ready_patient_count'],
+        'raw_ready_subject_ids': dataset_audit['raw_ready_subject_ids'],
+        'selected_patient_count': dataset_audit['selected_patient_count'],
+        'selected_complete_instance_count': dataset_audit[
+            'selected_complete_instance_count'
+        ],
+        'selected_subject_ids': dataset_audit['selected_subject_ids'],
+        'raw_excluded_subject_ids_present': dataset_audit[
+            'raw_excluded_subject_ids_present'
+        ],
+        'selection_source': dataset_audit['selection_source'],
+        'complete_dataset_audit': dataset_audit,
         'checkpoints': checkpoint_provenance,
         'same_frozen_pipeline_as_defect': True,
         'defect_masks_consumed': False,

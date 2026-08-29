@@ -8,6 +8,7 @@ unchanged.  This file is a training entry; contract audits should use
 
 import argparse
 import json
+import math
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
@@ -25,6 +26,9 @@ from training_protocol import load_training_protocol, validation_perturbation_sp
 
 
 DEFECT_PROTOCOL_STATUS = 'FORMAL M3 DEFECT TRAINING - PATIENT-LEVEL 5-FOLD SPLIT'
+M4_SOFT_HYPERPARAMETER_STATUS = (
+    'M4 DEVELOPMENT HYPERPARAMETERS - NOT FROZEN PAPER HYPERPARAMETERS'
+)
 
 
 def _validate_raw_defect_identity(raw_sample, record):
@@ -65,10 +69,64 @@ def iter_formal_defect_validation_samples(dataset, split, protocol):
             )
 
 
+def _resolve_m4_soft_config(args):
+    enable_mapping = getattr(args, 'enable_m4_defect_mapping', False)
+    soft_enabled = getattr(args, 'enable_m4_soft_modulation', False)
+    sigma_mm = getattr(args, 'm4_soft_sigma_mm', None)
+    strength = getattr(args, 'm4_soft_strength', None)
+    if not isinstance(enable_mapping, bool):
+        raise DefectTrainingContractError('enable_m4_defect_mapping must be bool.')
+    if not isinstance(soft_enabled, bool):
+        raise DefectTrainingContractError('enable_m4_soft_modulation must be bool.')
+    if soft_enabled and not enable_mapping:
+        raise DefectTrainingContractError(
+            '--enable-m4-soft-modulation requires --enable-m4-defect-mapping.'
+        )
+    if not soft_enabled:
+        if sigma_mm is not None or strength is not None:
+            raise DefectTrainingContractError(
+                'M4 soft sigma/strength require --enable-m4-soft-modulation.'
+            )
+        return enable_mapping, False, None, None
+    for value, name in (
+        (sigma_mm, 'm4_soft_sigma_mm'),
+        (strength, 'm4_soft_strength'),
+    ):
+        if isinstance(value, bool):
+            raise DefectTrainingContractError(f'{name} must be a finite scalar.')
+        try:
+            scalar = float(value)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise DefectTrainingContractError(
+                f'{name} must be a finite scalar.'
+            ) from error
+        if not math.isfinite(scalar):
+            raise DefectTrainingContractError(f'{name} must be a finite scalar.')
+        if name == 'm4_soft_sigma_mm' and scalar <= 0.0:
+            raise DefectTrainingContractError('m4_soft_sigma_mm must be greater than zero.')
+        if name == 'm4_soft_strength' and scalar < 0.0:
+            raise DefectTrainingContractError(
+                'm4_soft_strength must be greater than or equal to zero.'
+            )
+        if name == 'm4_soft_sigma_mm':
+            sigma_mm = scalar
+        else:
+            strength = scalar
+    return enable_mapping, True, sigma_mm, strength
+
+
 @contextmanager
-def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
+def _install_defect_adapter(
+    protocol,
+    *,
+    enable_m4_defect_mapping,
+    m4_soft_modulation_enabled=False,
+    m4_soft_sigma_mm=None,
+    m4_soft_strength=None,
+):
     """Temporarily inject defect-aware boundaries into the reused M3 loop."""
     m4_hard_constraint_active = enable_m4_defect_mapping
+    m4_soft_modulation_active = m4_soft_modulation_enabled
     originals = {
         'create_dataset': complete_training.create_dataset,
         '_resolve_training_contract': complete_training._resolve_training_contract,
@@ -77,6 +135,8 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
         'm2_ct_collate_fn': complete_training.m2_ct_collate_fn,
         '_training_config_record': complete_training._training_config_record,
         '_append_json_log': complete_training._append_json_log,
+        'run_training_step': complete_training.run_training_step,
+        'run_validation_step': complete_training.run_validation_step,
     }
     state = {'split': None, 'provenance': None}
 
@@ -109,6 +169,10 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
                     'test_instance_count': len(split.test_indices),
                     'enable_m4_defect_mapping': enable_m4_defect_mapping,
                     'm4_hard_constraint_active': m4_hard_constraint_active,
+                    'm4_soft_modulation_enabled': m4_soft_modulation_enabled,
+                    'm4_soft_modulation_active': m4_soft_modulation_active,
+                    'm4_soft_sigma_mm': m4_soft_sigma_mm,
+                    'm4_soft_strength': m4_soft_strength,
                 },
                 sort_keys=True,
             )
@@ -122,6 +186,11 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
         record['defect_training_provenance'] = state['provenance']
         record['enable_m4_defect_mapping'] = enable_m4_defect_mapping
         record['m4_hard_constraint_active'] = m4_hard_constraint_active
+        record['m4_soft_modulation_enabled'] = m4_soft_modulation_enabled
+        record['m4_soft_modulation_active'] = m4_soft_modulation_active
+        record['m4_soft_sigma_mm'] = m4_soft_sigma_mm
+        record['m4_soft_strength'] = m4_soft_strength
+        record['m4_soft_hyperparameter_status'] = M4_SOFT_HYPERPARAMETER_STATUS
         return record
 
     def append_defect_json_log(path, record):
@@ -130,6 +199,11 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
             enriched['defect_training_provenance'] = state['provenance']
             enriched['enable_m4_defect_mapping'] = enable_m4_defect_mapping
             enriched['m4_hard_constraint_active'] = m4_hard_constraint_active
+            enriched['m4_soft_modulation_enabled'] = m4_soft_modulation_enabled
+            enriched['m4_soft_modulation_active'] = m4_soft_modulation_active
+            enriched['m4_soft_sigma_mm'] = m4_soft_sigma_mm
+            enriched['m4_soft_strength'] = m4_soft_strength
+            enriched['m4_soft_hyperparameter_status'] = M4_SOFT_HYPERPARAMETER_STATUS
         return originals['_append_json_log'](path, enriched)
 
     complete_training.create_dataset = defect_dataset_factory
@@ -145,6 +219,18 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
     )
     complete_training._training_config_record = defect_training_config_record
     complete_training._append_json_log = append_defect_json_log
+    complete_training.run_training_step = partial(
+        originals['run_training_step'],
+        m4_soft_modulation_enabled=m4_soft_modulation_enabled,
+        m4_soft_sigma_mm=m4_soft_sigma_mm,
+        m4_soft_strength=m4_soft_strength,
+    )
+    complete_training.run_validation_step = partial(
+        originals['run_validation_step'],
+        m4_soft_modulation_enabled=m4_soft_modulation_enabled,
+        m4_soft_sigma_mm=m4_soft_sigma_mm,
+        m4_soft_strength=m4_soft_strength,
+    )
     try:
         yield state
     finally:
@@ -155,15 +241,24 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
 def run_defect_training(args):
     """Run the reused M3 loop over the selected formal defect dataset."""
     protocol = load_training_protocol(args.protocol_manifest)
-    enabled = getattr(args, 'enable_m4_defect_mapping', False)
-    if not isinstance(enabled, bool):
-        raise DefectTrainingContractError('enable_m4_defect_mapping must be bool.')
-    with _install_defect_adapter(protocol, enable_m4_defect_mapping=enabled) as state:
+    enabled, soft_enabled, sigma_mm, strength = _resolve_m4_soft_config(args)
+    with _install_defect_adapter(
+        protocol,
+        enable_m4_defect_mapping=enabled,
+        m4_soft_modulation_enabled=soft_enabled,
+        m4_soft_sigma_mm=sigma_mm,
+        m4_soft_strength=strength,
+    ) as state:
         result = complete_training.train(args)
     output = dict(result)
     output['defect_training_provenance'] = state['provenance']
     output['enable_m4_defect_mapping'] = enabled
     output['m4_hard_constraint_active'] = enabled
+    output['m4_soft_modulation_enabled'] = soft_enabled
+    output['m4_soft_modulation_active'] = soft_enabled
+    output['m4_soft_sigma_mm'] = sigma_mm
+    output['m4_soft_strength'] = strength
+    output['m4_soft_hyperparameter_status'] = M4_SOFT_HYPERPARAMETER_STATUS
     return output
 
 
@@ -202,6 +297,24 @@ def build_argument_parser():
             'Explicitly derive M4 coarse mapping fields and activate the matching/supervision '
             'hard constraint; omitted keeps the frozen M3 path.'
         ),
+    )
+    parser.add_argument(
+        '--enable-m4-soft-modulation',
+        action='store_true',
+        help=(
+            'Activate M4 defect-proximity pairwise similarity modulation; '
+            'requires --enable-m4-defect-mapping.'
+        ),
+    )
+    parser.add_argument(
+        '--m4-soft-sigma-mm',
+        type=float,
+        help='Development-only physical-mm proximity scale; must be finite and > 0.',
+    )
+    parser.add_argument(
+        '--m4-soft-strength',
+        type=float,
+        help='Development-only pair penalty strength; must be finite and >= 0.',
     )
     return parser
 

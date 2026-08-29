@@ -22,6 +22,10 @@ from m4_hard_constraint import (
     build_m4_mask_aware_gt,
     resolve_m4_matching_masks,
 )
+from m4_soft_modulation import (
+    M4SoftModulationError,
+    run_m4_soft_modulated_matching,
+)
 from matching_loss import compute_collision_aware_match_loss
 from training_protocol import (
     M3TrainingProtocolError,
@@ -583,7 +587,12 @@ def _forward_and_loss(
     primary_max_distance_mm,
     high_confidence_distance_mm,
     device,
+    m4_soft_modulation_enabled=False,
+    m4_soft_sigma_mm=None,
+    m4_soft_strength=None,
 ):
+    if not isinstance(m4_soft_modulation_enabled, bool):
+        raise M3TrainingContractError('m4_soft_modulation_enabled must be bool.')
     point_input, ct_input = _prepare_model_inputs(
         sample,
         point_collate_fn,
@@ -597,12 +606,56 @@ def _forward_and_loss(
     point_valid_mask = hard_constraint['point_valid_mask']
     ct_valid_mask = hard_constraint['ct_valid_mask']
 
-    matcher_output = matcher(
-        q=q,
-        k=k,
-        point_valid_mask=point_valid_mask,
-        ct_valid_mask=ct_valid_mask,
-    )
+    soft_diagnostics = {
+        'm4_soft_modulation_enabled': False,
+        'm4_soft_modulation_active': False,
+        'm4_soft_sigma_mm': None,
+        'm4_soft_strength': None,
+        'point_reliability_min': None,
+        'point_reliability_mean': None,
+        'point_reliability_max': None,
+        'ct_reliability_min': None,
+        'ct_reliability_mean': None,
+        'ct_reliability_max': None,
+        'pair_reliability_min': None,
+        'pair_reliability_mean': None,
+        'pair_reliability_max': None,
+        'base_similarity_mean': None,
+        'modulated_similarity_mean': None,
+        'soft_similarity_changed': False,
+    }
+    if m4_soft_modulation_enabled:
+        if hard_constraint['enabled'] is not True:
+            raise M3TrainingContractError(
+                'M4 soft modulation requires active M4 defect mapping and hard masks.'
+            )
+        try:
+            matcher_output = run_m4_soft_modulated_matching(
+                q=q,
+                k=k,
+                point_coordinates_mm=point_phys,
+                ct_coordinates_mm=ct_phys,
+                point_valid_mask=point_valid_mask,
+                ct_valid_mask=ct_valid_mask,
+                sigma_mm=m4_soft_sigma_mm,
+                strength=m4_soft_strength,
+                matcher=matcher,
+            )
+        except M4SoftModulationError as error:
+            raise M3TrainingContractError(
+                f'M4 soft-modulated matching failed: {error}'
+            ) from error
+        for field in tuple(soft_diagnostics):
+            soft_diagnostics[field] = matcher_output[field]
+    else:
+        # Preserve the frozen M3/M4-1 matcher route when the explicitly
+        # optional soft path is disabled.
+        matcher_output = matcher(
+            q=q,
+            k=k,
+            point_valid_mask=point_valid_mask,
+            ct_valid_mask=ct_valid_mask,
+        )
     _require_fields(
         matcher_output,
         ('log_assignment', 'point_valid_mask', 'ct_valid_mask'),
@@ -679,6 +732,7 @@ def _forward_and_loss(
             'num_supervised_points_after_mask': int(
                 loss_output['num_supervised_points']
             ),
+            **soft_diagnostics,
         }
     )
     return result
@@ -711,6 +765,9 @@ def run_training_step(
     primary_max_distance_mm,
     high_confidence_distance_mm,
     device,
+    m4_soft_modulation_enabled=False,
+    m4_soft_sigma_mm=None,
+    m4_soft_strength=None,
 ):
     """Run one batch-size-one FP32 optimizer step with the formal M3-3 loss."""
     device = torch.device(device)
@@ -731,6 +788,9 @@ def run_training_step(
         primary_max_distance_mm=primary_max_distance_mm,
         high_confidence_distance_mm=high_confidence_distance_mm,
         device=device,
+        m4_soft_modulation_enabled=m4_soft_modulation_enabled,
+        m4_soft_sigma_mm=m4_soft_sigma_mm,
+        m4_soft_strength=m4_soft_strength,
     )
     loss = result['loss']
     if not loss.requires_grad:
@@ -757,6 +817,9 @@ def run_validation_step(
     primary_max_distance_mm,
     high_confidence_distance_mm,
     device,
+    m4_soft_modulation_enabled=False,
+    m4_soft_sigma_mm=None,
+    m4_soft_strength=None,
 ):
     """Run one batch-size-one FP32 validation forward and restore prior modes."""
     device = torch.device(device)
@@ -777,6 +840,9 @@ def run_validation_step(
                 primary_max_distance_mm=primary_max_distance_mm,
                 high_confidence_distance_mm=high_confidence_distance_mm,
                 device=device,
+                m4_soft_modulation_enabled=m4_soft_modulation_enabled,
+                m4_soft_sigma_mm=m4_soft_sigma_mm,
+                m4_soft_strength=m4_soft_strength,
             )
         if result['loss'].requires_grad:
             raise M3TrainingContractError('validation loss must not require gradients.')

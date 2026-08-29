@@ -6,20 +6,25 @@ from pathlib import Path
 
 import numpy as np
 
-from defect_evaluation import load_defect_evaluation_protocol, run_protocol_audit
+from defect_evaluation import (
+    build_defect_test_manifest,
+    load_defect_evaluation_protocol,
+    read_and_validate_defect_checkpoint,
+    resolve_fold_artifacts,
+    run_protocol_audit,
+)
 from m3_metric_diagnostic import (
     DIAGNOSTIC_TRE_FIELDS,
-    EXPECTED_DEFECT_CONDITION_COUNT,
-    EXPECTED_DEFECT_INSTANCE_COUNT,
-    EXPECTED_PATIENT_COUNT,
-    EXPECTED_TEST_CASE_COUNT,
     M3MetricDiagnosticContractError,
     build_pat6_forensic,
     compute_tre_diagnostics,
+    get_diagnostic_protocol_contract,
     legacy_parameter_rte_mm,
     load_diagnostic_protocol,
     make_rigid_transform,
     shift_transform_origin,
+    validate_case_identity_set,
+    validate_legacy_result_tree,
     validate_source_protocols,
 )
 from training_protocol import load_training_protocol
@@ -35,6 +40,15 @@ DEFAULT_EVALUATION_PROTOCOL = (
 )
 DEFAULT_DIAGNOSTIC_PROTOCOL = (
     EXPERIMENT_DIR / 'protocols' / 'm3_metric_diagnostic_v1.json'
+)
+CLEAN10_TRAINING_PROTOCOL = (
+    EXPERIMENT_DIR / 'protocols' / 'm3_6b_5fold_clean10_v2.json'
+)
+CLEAN10_EVALUATION_PROTOCOL = (
+    EXPERIMENT_DIR / 'protocols' / 'm3_defect_eval_clean10_v2.json'
+)
+CLEAN10_DIAGNOSTIC_PROTOCOL = (
+    EXPERIMENT_DIR / 'protocols' / 'm3_metric_diagnostic_clean10_v2.json'
 )
 FROZEN_DIFF_BASE = 'defect_evaluation_adapter'
 # The metric/inference core remains byte-diff frozen. The two defect adapter
@@ -135,17 +149,114 @@ def run_audit(
     training_protocol_path=DEFAULT_TRAINING_PROTOCOL,
     evaluation_protocol_path=DEFAULT_EVALUATION_PROTOCOL,
     diagnostic_protocol_path=DEFAULT_DIAGNOSTIC_PROTOCOL,
+    legacy_results_root=None,
+    checkpoint_root=None,
+    json_log_root=None,
 ) -> dict:
     """Run deterministic protocol/math/aggregation checks without real data."""
     training = load_training_protocol(training_protocol_path)
     evaluation = load_defect_evaluation_protocol(evaluation_protocol_path)
     diagnostic = load_diagnostic_protocol(diagnostic_protocol_path)
     validate_source_protocols(diagnostic, training, evaluation)
+    diagnostic_contract = get_diagnostic_protocol_contract(diagnostic)
     protocol_audit = run_protocol_audit(training, evaluation)
-    if protocol_audit['expected_test_case_count'] != EXPECTED_TEST_CASE_COUNT:
-        raise M3MetricDiagnosticContractError(
-            'frozen source protocol no longer expands to 825 cases.'
+    fold_ids = tuple(training['folds'])
+    manifests = {
+        fold_id: build_defect_test_manifest(training, evaluation, fold_id)
+        for fold_id in fold_ids
+    }
+    all_manifest_cases = [
+        case
+        for fold_id in fold_ids
+        for case in manifests[fold_id]['cases']
+    ]
+    validate_case_identity_set(
+        all_manifest_cases,
+        all_manifest_cases,
+        expected_count=diagnostic_contract['expected_test_case_count'],
+        label='diagnostic manifest union',
+    )
+    patient_ids = {case['subject_id'] for case in all_manifest_cases}
+    defect_ids = {case['defect_id'] for case in all_manifest_cases}
+    instance_ids = {
+        (case['subject_id'], case['defect_id'])
+        for case in all_manifest_cases
+    }
+    pat6_case_count = sum(
+        case['subject_id'] == 'Pat6' for case in all_manifest_cases
+    )
+    contract_comparisons = (
+        (
+            len(patient_ids),
+            diagnostic_contract['expected_patient_count'],
+            'patient count',
+        ),
+        (
+            len(defect_ids),
+            diagnostic_contract['expected_defect_condition_count'],
+            'defect condition count',
+        ),
+        (
+            len(instance_ids),
+            diagnostic_contract['expected_defect_instance_count'],
+            'defect instance count',
+        ),
+        (
+            len(all_manifest_cases),
+            diagnostic_contract['expected_test_case_count'],
+            'test case count',
+        ),
+        (
+            pat6_case_count,
+            diagnostic_contract['expected_pat6_case_count'],
+            'Pat6 case count',
+        ),
+        (
+            protocol_audit['expected_test_case_count'],
+            diagnostic_contract['expected_test_case_count'],
+            'source protocol test case count',
+        ),
+    )
+    for actual, expected, name in contract_comparisons:
+        if actual != expected:
+            raise M3MetricDiagnosticContractError(
+                f'{name} mismatch: expected={expected}, actual={actual}.'
+            )
+
+    legacy_audit = None
+    if legacy_results_root is not None:
+        legacy_audit = validate_legacy_result_tree(
+            legacy_results_root,
+            {
+                fold_id: manifests[fold_id]['cases']
+                for fold_id in fold_ids
+            },
+            diagnostic_protocol=diagnostic,
         )
+
+    checkpoint_audit = None
+    if checkpoint_root is not None:
+        checkpoint_audit = {}
+        for fold_id in fold_ids:
+            checkpoint_path, jsonl_path = resolve_fold_artifacts(
+                checkpoint_root,
+                fold_id,
+                evaluation,
+                json_log_root=json_log_root,
+            )
+            _, metadata = read_and_validate_defect_checkpoint(
+                checkpoint_path,
+                jsonl_path,
+                training,
+                evaluation,
+                fold_id,
+            )
+            checkpoint_audit[fold_id] = {
+                'checkpoint_path': str(checkpoint_path.resolve()),
+                'checkpoint_epoch': metadata['epoch'],
+                'checkpoint_best_val_loss': metadata['best_val_loss'],
+                'cpu_metadata_validation_pass': True,
+            }
 
     points = np.asarray(
         [
@@ -272,7 +383,7 @@ def run_audit(
         raise M3MetricDiagnosticContractError(
             'frozen metric/inference core differs from defect_evaluation_adapter.'
         )
-    return {
+    result = {
         'DIAGNOSTIC_PROTOCOL_AUDIT': 'PASS',
         'TRE_IDENTICAL_TRANSFORM_TEST': 'PASS',
         'TRE_TRANSLATION_TEST': 'PASS',
@@ -281,13 +392,54 @@ def run_audit(
         'SOLVER_FAILURE_POLICY': 'PASS',
         'INVALID_TRANSFORM_FAIL_CLOSED': 'PASS',
         'PAT6_FORENSIC_AGGREGATION_TEST': 'PASS',
-        'EXPECTED_PATIENT_COUNT': EXPECTED_PATIENT_COUNT,
-        'EXPECTED_DEFECT_CONDITION_COUNT': EXPECTED_DEFECT_CONDITION_COUNT,
-        'EXPECTED_DEFECT_INSTANCE_COUNT': EXPECTED_DEFECT_INSTANCE_COUNT,
-        'EXPECTED_TEST_CASE_COUNT': EXPECTED_TEST_CASE_COUNT,
+        'EXPECTED_PATIENT_COUNT': diagnostic_contract[
+            'expected_patient_count'
+        ],
+        'EXPECTED_DEFECT_CONDITION_COUNT': diagnostic_contract[
+            'expected_defect_condition_count'
+        ],
+        'EXPECTED_DEFECT_INSTANCE_COUNT': diagnostic_contract[
+            'expected_defect_instance_count'
+        ],
+        'EXPECTED_TEST_CASE_COUNT': diagnostic_contract[
+            'expected_test_case_count'
+        ],
         'FROZEN_BASELINE_DIFF': 'PASS',
         'LOCAL_REAL_DATA_AUDIT_RUN': False,
     }
+    if not diagnostic_contract['pat6_forensic_required']:
+        result.update(
+            {
+                'PAT6_FORENSIC_AGGREGATION_TEST': 'NOT_APPLICABLE',
+                'PAT6_CASE_COUNT': pat6_case_count,
+                'PER_FOLD_CASE_COUNTS': {
+                    fold_id: manifests[fold_id]['total_cases']
+                    for fold_id in fold_ids
+                },
+                'IDENTITY_UNIQUE': True,
+                'SOURCE_TRAINING_PROTOCOL_HASH': training['protocol_hash'],
+                'SOURCE_EVALUATION_PROTOCOL_HASH': evaluation[
+                    'evaluation_protocol_hash'
+                ],
+                'DIAGNOSTIC_PROTOCOL_HASH': diagnostic[
+                    'diagnostic_protocol_hash'
+                ],
+                'LEGACY_PER_FOLD_UNION_COUNT': (
+                    None
+                    if legacy_audit is None
+                    else legacy_audit['per_fold_union_count']
+                ),
+                'LEGACY_ROOT_CASES_STATUS': (
+                    None
+                    if legacy_audit is None
+                    else legacy_audit['legacy_root_cases_status']
+                ),
+                'CHECKPOINT_AUDIT': checkpoint_audit,
+                'model_loaded': False,
+                'gpu_used': False,
+            }
+        )
+    return result
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -309,6 +461,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_DIAGNOSTIC_PROTOCOL,
     )
+    parser.add_argument('--legacy-results-root', type=Path)
+    parser.add_argument('--checkpoint-root', type=Path)
+    parser.add_argument('--json-log-root', type=Path)
     return parser
 
 
@@ -318,6 +473,9 @@ def main(argv=None):
         args.protocol_manifest,
         args.evaluation_protocol,
         args.diagnostic_protocol,
+        args.legacy_results_root,
+        args.checkpoint_root,
+        args.json_log_root,
     )
     for key, value in result.items():
         if isinstance(value, bool):
@@ -332,4 +490,11 @@ if __name__ == '__main__':
     main()
 
 
-__all__ = ['build_argument_parser', 'main', 'run_audit']
+__all__ = [
+    'CLEAN10_DIAGNOSTIC_PROTOCOL',
+    'CLEAN10_EVALUATION_PROTOCOL',
+    'CLEAN10_TRAINING_PROTOCOL',
+    'build_argument_parser',
+    'main',
+    'run_audit',
+]

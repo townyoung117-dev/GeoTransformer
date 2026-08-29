@@ -17,6 +17,13 @@ import numpy as np
 
 
 DIAGNOSTIC_PROTOCOL_VERSION = 'm3_metric_diagnostic_v1'
+DIAGNOSTIC_PROTOCOL_HASH = (
+    '3807dee00a551840d5a293bbb715e40d281855a6fef375c4872b6a25fb3d016b'
+)
+CLEAN10_DIAGNOSTIC_PROTOCOL_VERSION = 'm3_metric_diagnostic_clean10_v2'
+CLEAN10_DIAGNOSTIC_PROTOCOL_HASH = (
+    '5f40c322433c2274d356213969f9041d2931ff0e058efb0c541bcf5e1a9624bc'
+)
 SOURCE_TRAINING_PROTOCOL_VERSION = 'm3_6b_5fold_v1'
 SOURCE_TRAINING_PROTOCOL_HASH = (
     'c0c635c1cb897ce33d15ba3ed58abdb12a8c5a8feb6a82fe51910146e8a99fac'
@@ -35,6 +42,18 @@ EXPECTED_TEST_CASE_COUNT = 825
 EXPECTED_PAT6_CASE_COUNT = 75
 EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD = {
     'Fold1': 225,
+    'Fold2': 150,
+    'Fold3': 150,
+    'Fold4': 150,
+    'Fold5': 150,
+}
+CLEAN10_EXPECTED_PATIENT_COUNT = 10
+CLEAN10_EXPECTED_DEFECT_CONDITION_COUNT = 5
+CLEAN10_EXPECTED_DEFECT_INSTANCE_COUNT = 50
+CLEAN10_EXPECTED_TEST_CASE_COUNT = 750
+CLEAN10_EXPECTED_PAT6_CASE_COUNT = 0
+CLEAN10_EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD = {
+    'Fold1': 150,
     'Fold2': 150,
     'Fold3': 150,
     'Fold4': 150,
@@ -125,6 +144,45 @@ _EXPECTED_DIAGNOSTIC_PROTOCOL = {
     'diagnostic_changes_registration_success_threshold': False,
     'diagnostic_changes_model_predictions': False,
 }
+_CLEAN10_EXPECTED_DIAGNOSTIC_PROTOCOL = {
+    **_EXPECTED_DIAGNOSTIC_PROTOCOL,
+    'diagnostic_protocol_version': CLEAN10_DIAGNOSTIC_PROTOCOL_VERSION,
+    'source_training_protocol_version': 'm3_6b_5fold_clean10_v2',
+    'source_training_protocol_hash': (
+        '34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c'
+    ),
+    'source_defect_evaluation_protocol_version': (
+        'm3_defect_eval_clean10_v2'
+    ),
+    'source_defect_evaluation_protocol_hash': (
+        'cfd519b923be3b623cffec8c8f5830cb5b1160859461180eddeb7134a0adb6b0'
+    ),
+    'expected_patient_count': CLEAN10_EXPECTED_PATIENT_COUNT,
+    'expected_defect_condition_count': (
+        CLEAN10_EXPECTED_DEFECT_CONDITION_COUNT
+    ),
+    'expected_defect_instance_count': CLEAN10_EXPECTED_DEFECT_INSTANCE_COUNT,
+    'expected_test_case_count': CLEAN10_EXPECTED_TEST_CASE_COUNT,
+}
+_DIAGNOSTIC_PROTOCOL_CONTRACTS = {
+    DIAGNOSTIC_PROTOCOL_VERSION: {
+        'diagnostic_protocol_hash': DIAGNOSTIC_PROTOCOL_HASH,
+        'expected': _EXPECTED_DIAGNOSTIC_PROTOCOL,
+        'pat6_forensic_required': True,
+        'expected_pat6_case_count': EXPECTED_PAT6_CASE_COUNT,
+        'legacy_complete_union_status': 'complete_union_verified',
+    },
+    CLEAN10_DIAGNOSTIC_PROTOCOL_VERSION: {
+        'diagnostic_protocol_hash': CLEAN10_DIAGNOSTIC_PROTOCOL_HASH,
+        'expected': _CLEAN10_EXPECTED_DIAGNOSTIC_PROTOCOL,
+        'pat6_forensic_required': False,
+        'expected_pat6_case_count': CLEAN10_EXPECTED_PAT6_CASE_COUNT,
+        'legacy_complete_union_status': 'complete_union',
+    },
+}
+SUPPORTED_DIAGNOSTIC_PROTOCOL_VERSIONS = tuple(
+    _DIAGNOSTIC_PROTOCOL_CONTRACTS
+)
 _DIAGNOSTIC_PROTOCOL_FIELDS = set(_EXPECTED_DIAGNOSTIC_PROTOCOL) | {
     'diagnostic_protocol_hash'
 }
@@ -172,6 +230,47 @@ def compute_diagnostic_protocol_hash(protocol: Mapping) -> str:
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
+def _diagnostic_contract_for_version(
+    diagnostic_protocol_version: str,
+) -> Mapping:
+    try:
+        return _DIAGNOSTIC_PROTOCOL_CONTRACTS[diagnostic_protocol_version]
+    except (KeyError, TypeError) as error:
+        raise M3MetricDiagnosticContractError(
+            'unsupported diagnostic_protocol_version '
+            f'{diagnostic_protocol_version!r}; expected one of '
+            f'{list(SUPPORTED_DIAGNOSTIC_PROTOCOL_VERSIONS)}.'
+        ) from error
+
+
+def get_diagnostic_protocol_contract(protocol_or_version) -> dict:
+    """Return a defensive runtime contract for one supported diagnostic."""
+    if isinstance(protocol_or_version, Mapping):
+        validate_diagnostic_protocol(protocol_or_version)
+        version = protocol_or_version['diagnostic_protocol_version']
+    else:
+        version = protocol_or_version
+    contract = _diagnostic_contract_for_version(version)
+    expected = contract['expected']
+    return {
+        'diagnostic_protocol_version': version,
+        'diagnostic_protocol_hash': contract['diagnostic_protocol_hash'],
+        'expected_patient_count': expected['expected_patient_count'],
+        'expected_defect_condition_count': expected[
+            'expected_defect_condition_count'
+        ],
+        'expected_defect_instance_count': expected[
+            'expected_defect_instance_count'
+        ],
+        'expected_test_case_count': expected['expected_test_case_count'],
+        'pat6_forensic_required': contract['pat6_forensic_required'],
+        'expected_pat6_case_count': contract['expected_pat6_case_count'],
+        'legacy_complete_union_status': contract[
+            'legacy_complete_union_status'
+        ],
+    }
+
+
 def validate_diagnostic_protocol(protocol: Mapping) -> Mapping:
     """Fail closed on any deviation from the versioned diagnostic contract."""
     if not isinstance(protocol, Mapping):
@@ -186,6 +285,9 @@ def validate_diagnostic_protocol(protocol: Mapping) -> Mapping:
             'diagnostic protocol fields mismatch; '
             f'missing={missing}, unexpected={unexpected}.'
         )
+    contract = _diagnostic_contract_for_version(
+        protocol.get('diagnostic_protocol_version')
+    )
     stored_hash = protocol['diagnostic_protocol_hash']
     if (
         not isinstance(stored_hash, str)
@@ -201,12 +303,22 @@ def validate_diagnostic_protocol(protocol: Mapping) -> Mapping:
             'diagnostic_protocol_hash mismatch: '
             f'stored={stored_hash}, computed={computed_hash}.'
         )
-    for field, expected in _EXPECTED_DIAGNOSTIC_PROTOCOL.items():
+    if not hmac.compare_digest(
+        stored_hash,
+        contract['diagnostic_protocol_hash'],
+    ):
+        raise M3MetricDiagnosticContractError(
+            'diagnostic_protocol_hash is not the frozen hash for '
+            f'{protocol["diagnostic_protocol_version"]}: '
+            f'stored={stored_hash}, '
+            f'expected={contract["diagnostic_protocol_hash"]}.'
+        )
+    for field, expected in contract['expected'].items():
         actual = protocol[field]
         if actual != expected or type(actual) is not type(expected):
             raise M3MetricDiagnosticContractError(
                 f'{field} must be exactly {expected!r} for '
-                f'{DIAGNOSTIC_PROTOCOL_VERSION}.'
+                f'{protocol["diagnostic_protocol_version"]}.'
             )
     return protocol
 
@@ -248,6 +360,24 @@ def validate_source_protocols(
         raise M3MetricDiagnosticContractError(
             'source defect evaluation protocol must be a mapping.'
         )
+    # A matching stored version/hash is insufficient: validate both source
+    # manifests canonically and against their own frozen versioned contracts.
+    try:
+        from defect_evaluation import (
+            validate_defect_evaluation_protocol,
+            validate_protocol_pair,
+        )
+        from training_protocol import validate_training_protocol
+
+        validate_training_protocol(training_protocol)
+        validate_defect_evaluation_protocol(defect_evaluation_protocol)
+        validate_protocol_pair(training_protocol, defect_evaluation_protocol)
+    except Exception as error:
+        if isinstance(error, M3MetricDiagnosticContractError):
+            raise
+        raise M3MetricDiagnosticContractError(
+            f'source protocol canonical validation failed: {error}'
+        ) from error
     comparisons = (
         (
             training_protocol.get('protocol_version'),
@@ -865,6 +995,7 @@ def aggregate_diagnostic_cases(
     *,
     expected_case_count: Optional[int] = None,
     expected_pat6_case_count: Optional[int] = None,
+    diagnostic_protocol: Optional[Mapping] = None,
 ) -> dict:
     """Build all required global and stratified diagnostic aggregates."""
     rows = list(cases)
@@ -873,7 +1004,24 @@ def aggregate_diagnostic_cases(
             f'diagnostic case count mismatch: expected={expected_case_count}, '
             f'actual={len(rows)}.'
         )
-    return {
+    if diagnostic_protocol is None:
+        # Backward-compatible public behavior for callers of the original v1
+        # API: retain the Pat6 forensic member unless a version is explicit.
+        pat6_forensic_required = True
+    else:
+        contract = get_diagnostic_protocol_contract(diagnostic_protocol)
+        pat6_forensic_required = contract['pat6_forensic_required']
+        if expected_pat6_case_count is None and pat6_forensic_required:
+            expected_pat6_case_count = contract['expected_pat6_case_count']
+        if not pat6_forensic_required and expected_pat6_case_count not in (
+            None,
+            0,
+        ):
+            raise M3MetricDiagnosticContractError(
+                'a nonzero Pat6 expectation is invalid for a diagnostic '
+                'protocol where Pat6 forensic is not applicable.'
+            )
+    result = {
         'overall': aggregate_case_group(rows),
         'per_fold': _aggregate_by(rows, ('fold_id',)),
         'per_subject': _aggregate_by(rows, ('subject_id',)),
@@ -883,11 +1031,13 @@ def aggregate_diagnostic_cases(
             rows,
             ('subject_id', 'defect_id'),
         ),
-        'pat6_forensic': build_pat6_forensic(
+    }
+    if pat6_forensic_required:
+        result['pat6_forensic'] = build_pat6_forensic(
             rows,
             expected_case_count=expected_pat6_case_count,
-        ),
-    }
+        )
+    return result
 
 
 def case_identity(case: Mapping) -> tuple:
@@ -1083,6 +1233,8 @@ def load_jsonl(path) -> list:
 def validate_legacy_result_tree(
     legacy_results_root,
     expected_cases_by_fold: Mapping[str, Sequence[Mapping]],
+    *,
+    diagnostic_protocol: Optional[Mapping] = None,
 ) -> Mapping[str, object]:
     """Validate the authoritative ordered union of the five Fold JSONL files.
 
@@ -1095,6 +1247,21 @@ def validate_legacy_result_tree(
         raise M3MetricDiagnosticContractError(
             f'legacy result root does not exist: {root}.'
         )
+    if diagnostic_protocol is None:
+        diagnostic_contract = get_diagnostic_protocol_contract(
+            DIAGNOSTIC_PROTOCOL_VERSION
+        )
+        expected_case_count = EXPECTED_TEST_CASE_COUNT
+        expected_counts_by_fold = EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD
+    else:
+        diagnostic_contract = get_diagnostic_protocol_contract(
+            diagnostic_protocol
+        )
+        expected_case_count = diagnostic_contract['expected_test_case_count']
+        expected_counts_by_fold = {
+            fold_id: len(rows)
+            for fold_id, rows in expected_cases_by_fold.items()
+        }
     expected_folds = tuple(EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD)
     if set(expected_cases_by_fold) != set(expected_folds):
         raise M3MetricDiagnosticContractError(
@@ -1105,7 +1272,7 @@ def validate_legacy_result_tree(
     fold_all = []
     for fold_id in expected_folds:
         expected = list(expected_cases_by_fold[fold_id])
-        required_count = EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD[fold_id]
+        required_count = expected_counts_by_fold[fold_id]
         if len(expected) != required_count:
             raise M3MetricDiagnosticContractError(
                 f'{fold_id} formal manifest count mismatch: '
@@ -1122,10 +1289,17 @@ def validate_legacy_result_tree(
         expected_all.extend(expected)
         fold_all.extend(rows)
 
+    manifest_union_count = sum(expected_counts_by_fold.values())
+    if manifest_union_count != expected_case_count:
+        raise M3MetricDiagnosticContractError(
+            'diagnostic protocol/manifest case count mismatch: '
+            f'protocol={expected_case_count}, manifests={manifest_union_count}.'
+        )
+
     validate_case_identity_set(
         fold_all,
         expected_all,
-        expected_count=EXPECTED_TEST_CASE_COUNT,
+        expected_count=expected_case_count,
         label='legacy per-fold union',
     )
     # This map call is intentionally separate from the set comparison above:
@@ -1134,9 +1308,10 @@ def validate_legacy_result_tree(
         fold_all,
         'legacy per-fold union',
     )
-    if len(union_by_identity) != EXPECTED_TEST_CASE_COUNT:
+    if len(union_by_identity) != expected_case_count:
         raise M3MetricDiagnosticContractError(
-            'legacy per-fold union must contain exactly 825 unique identities.'
+            'legacy per-fold union must contain exactly '
+            f'{expected_case_count} unique identities.'
         )
 
     root_path = root / 'cases.jsonl'
@@ -1146,18 +1321,18 @@ def validate_legacy_result_tree(
     if root_path.exists():
         root_rows = load_jsonl(root_path)
         root_count = len(root_rows)
-        if root_count == EXPECTED_TEST_CASE_COUNT:
+        if root_count == expected_case_count:
             validate_case_identity_set(
                 root_rows,
                 fold_all,
-                expected_count=EXPECTED_TEST_CASE_COUNT,
+                expected_count=expected_case_count,
                 label='legacy root complete union',
             )
-            root_status = 'complete_union_verified'
+            root_status = diagnostic_contract['legacy_complete_union_status']
         else:
             matching_folds = []
             for fold_id in expected_folds:
-                required_count = EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD[fold_id]
+                required_count = expected_counts_by_fold[fold_id]
                 if root_count != required_count:
                     continue
                 try:
@@ -1172,7 +1347,8 @@ def validate_legacy_result_tree(
                 matching_folds.append(fold_id)
             if len(matching_folds) != 1:
                 raise M3MetricDiagnosticContractError(
-                    'legacy root cases.jsonl is neither the complete 825-case '
+                    'legacy root cases.jsonl is neither the complete '
+                    f'{expected_case_count}-case '
                     'per-fold union nor one exact formal single-Fold invocation '
                     f'artifact; root_case_count={root_count}.'
                 )
@@ -1198,7 +1374,16 @@ def validate_legacy_result_tree(
 
 __all__ = [
     'CATASTROPHIC_ROTATION_THRESHOLD_DEG',
+    'CLEAN10_DIAGNOSTIC_PROTOCOL_HASH',
+    'CLEAN10_DIAGNOSTIC_PROTOCOL_VERSION',
+    'CLEAN10_EXPECTED_DEFECT_CONDITION_COUNT',
+    'CLEAN10_EXPECTED_DEFECT_INSTANCE_COUNT',
+    'CLEAN10_EXPECTED_LEGACY_CASE_COUNTS_BY_FOLD',
+    'CLEAN10_EXPECTED_PAT6_CASE_COUNT',
+    'CLEAN10_EXPECTED_PATIENT_COUNT',
+    'CLEAN10_EXPECTED_TEST_CASE_COUNT',
     'CONFIDENCE_FIELDS',
+    'DIAGNOSTIC_PROTOCOL_HASH',
     'DIAGNOSTIC_PROTOCOL_VERSION',
     'DIAGNOSTIC_TRE_FIELDS',
     'EXPECTED_DEFECT_CONDITION_COUNT',
@@ -1230,8 +1415,10 @@ __all__ = [
     'shift_transform_origin',
     'summarize_confidence',
     'transform_points',
+    'get_diagnostic_protocol_contract',
     'validate_case_identity_set',
     'validate_diagnostic_protocol',
     'validate_legacy_result_tree',
     'validate_source_protocols',
+    'SUPPORTED_DIAGNOSTIC_PROTOCOL_VERSIONS',
 ]

@@ -28,11 +28,11 @@ from defect_evaluation import (
 from defect_training import build_formal_defect_split, create_formal_defect_dataset
 from evaluation import correspondence_inlier_metrics, evaluate_registration_result
 from m3_metric_diagnostic import (
-    EXPECTED_TEST_CASE_COUNT,
     M3MetricDiagnosticContractError,
     aggregate_diagnostic_cases,
     compute_tre_diagnostics,
     cross_check_legacy_cases,
+    get_diagnostic_protocol_contract,
     load_diagnostic_protocol,
     make_rigid_transform,
     rotation_error_degrees,
@@ -54,12 +54,27 @@ DEFAULT_EVALUATION_PROTOCOL = (
 DEFAULT_DIAGNOSTIC_PROTOCOL = (
     EXPERIMENT_DIR / 'protocols' / 'm3_metric_diagnostic_v1.json'
 )
+CLEAN10_TRAINING_PROTOCOL = (
+    EXPERIMENT_DIR / 'protocols' / 'm3_6b_5fold_clean10_v2.json'
+)
+CLEAN10_EVALUATION_PROTOCOL = (
+    EXPERIMENT_DIR / 'protocols' / 'm3_defect_eval_clean10_v2.json'
+)
+CLEAN10_DIAGNOSTIC_PROTOCOL = (
+    EXPERIMENT_DIR / 'protocols' / 'm3_metric_diagnostic_clean10_v2.json'
+)
 DEFAULT_OUTPUT_ROOT_NAME = 'defect_m3_metric_diagnostic_v1'
 FROZEN_FORMAL_OUTPUT_ROOT_NAME = 'defect_m3_eval_formal'
+CLEAN10_FROZEN_FORMAL_OUTPUT_ROOT_NAME = 'defect_m3_clean10_eval_formal'
 DIAGNOSTIC_RRE_ABS_TOLERANCE = 1e-10
 
 
-def _selected_fold_ids(args) -> tuple:
+def _selected_fold_ids(args, training_protocol=None) -> tuple:
+    fold_ids = tuple(
+        FOLD_SUBJECTS
+        if training_protocol is None
+        else training_protocol['folds']
+    )
     all_folds = bool(getattr(args, 'all_folds', False))
     fold_id = getattr(args, 'fold_id', None)
     if all_folds == (fold_id is not None):
@@ -67,10 +82,10 @@ def _selected_fold_ids(args) -> tuple:
             'choose exactly one Fold selector: --fold-id or --all-folds.'
         )
     if all_folds:
-        return tuple(FOLD_SUBJECTS)
-    if fold_id not in FOLD_SUBJECTS:
+        return fold_ids
+    if fold_id not in fold_ids:
         raise M3MetricDiagnosticContractError(
-            f'unknown fold_id {fold_id!r}; expected one of {list(FOLD_SUBJECTS)}.'
+            f'unknown fold_id {fold_id!r}; expected one of {list(fold_ids)}.'
         )
     return (fold_id,)
 
@@ -100,10 +115,14 @@ def _require_safe_empty_output_root(output_root, legacy_results_root) -> Path:
         raise M3MetricDiagnosticContractError(
             'diagnostic output root must not equal the frozen legacy result root.'
         )
-    if output_resolved.name == FROZEN_FORMAL_OUTPUT_ROOT_NAME:
+    frozen_names = (
+        FROZEN_FORMAL_OUTPUT_ROOT_NAME,
+        CLEAN10_FROZEN_FORMAL_OUTPUT_ROOT_NAME,
+    )
+    if output_resolved.name in frozen_names:
         raise M3MetricDiagnosticContractError(
             f'refusing to write diagnostic output into '
-            f'{FROZEN_FORMAL_OUTPUT_ROOT_NAME!r}.'
+            f'{output_resolved.name!r}.'
         )
     if output.exists():
         if not output.is_dir():
@@ -151,7 +170,93 @@ def _all_manifests(training_protocol, evaluation_protocol) -> Mapping[str, Mappi
             evaluation_protocol,
             fold_id,
         )
-        for fold_id in FOLD_SUBJECTS
+        for fold_id in training_protocol['folds']
+    }
+
+
+def _validate_manifest_contract(
+    training_protocol,
+    diagnostic_protocol,
+    manifests: Mapping[str, Mapping],
+    protocol_audit: Mapping,
+) -> dict:
+    """Cross-check dynamic manifests against the selected diagnostic contract."""
+    contract = get_diagnostic_protocol_contract(diagnostic_protocol)
+    fold_ids = tuple(training_protocol['folds'])
+    if tuple(manifests) != fold_ids:
+        raise M3MetricDiagnosticContractError(
+            'diagnostic manifest folds do not match the training protocol.'
+        )
+    all_cases = [
+        case
+        for fold_id in fold_ids
+        for case in manifests[fold_id]['cases']
+    ]
+    patient_ids = {case['subject_id'] for case in all_cases}
+    defect_ids = {case['defect_id'] for case in all_cases}
+    instance_ids = {
+        (case['subject_id'], case['defect_id']) for case in all_cases
+    }
+    pat6_case_count = sum(
+        case['subject_id'] == 'Pat6' for case in all_cases
+    )
+    comparisons = (
+        (
+            len(patient_ids),
+            contract['expected_patient_count'],
+            'patient count',
+        ),
+        (
+            len(defect_ids),
+            contract['expected_defect_condition_count'],
+            'defect condition count',
+        ),
+        (
+            len(instance_ids),
+            contract['expected_defect_instance_count'],
+            'defect instance count',
+        ),
+        (
+            len(all_cases),
+            contract['expected_test_case_count'],
+            'test case count',
+        ),
+        (
+            protocol_audit['ready_patient_count'],
+            contract['expected_patient_count'],
+            'source audit patient count',
+        ),
+        (
+            protocol_audit['expected_test_instance_count'],
+            contract['expected_defect_instance_count'],
+            'source audit defect instance count',
+        ),
+        (
+            protocol_audit['expected_test_case_count'],
+            contract['expected_test_case_count'],
+            'source audit test case count',
+        ),
+        (
+            pat6_case_count,
+            contract['expected_pat6_case_count'],
+            'Pat6 case count',
+        ),
+    )
+    for actual, expected, name in comparisons:
+        if actual != expected:
+            raise M3MetricDiagnosticContractError(
+                f'{name} mismatch: expected={expected}, actual={actual}.'
+            )
+    return {
+        'patient_count': len(patient_ids),
+        'defect_condition_count': len(defect_ids),
+        'defect_instance_count': len(instance_ids),
+        'test_case_count': len(all_cases),
+        'pat6_case_count': pat6_case_count,
+        'per_fold_case_counts': {
+            fold_id: manifests[fold_id]['total_cases']
+            for fold_id in fold_ids
+        },
     }
 
 
@@ -216,6 +321,15 @@ def run_audit_only(
         training_protocol,
         evaluation_protocol,
     )
+    manifest_audit = _validate_manifest_contract(
+        training_protocol,
+        diagnostic_protocol,
+        manifests,
+        protocol_audit,
+    )
+    diagnostic_contract = get_diagnostic_protocol_contract(
+        diagnostic_protocol
+    )
     legacy = legacy_results
     checkpoint_audit = None
     if checkpoint_root is not None:
@@ -237,7 +351,9 @@ def run_audit_only(
         ],
         'selected_folds': list(fold_ids),
         'selected_expected_case_count': selected_case_count,
-        'global_expected_case_count': EXPECTED_TEST_CASE_COUNT,
+        'global_expected_case_count': diagnostic_contract[
+            'expected_test_case_count'
+        ],
         'LEGACY_PER_FOLD_COUNTS': dict(legacy['per_fold_counts']),
         'LEGACY_PER_FOLD_UNION_COUNT': legacy['per_fold_union_count'],
         'LEGACY_PER_FOLD_UNION_IDENTITY_AUDIT': legacy[
@@ -269,6 +385,22 @@ def run_audit_only(
         'model_loaded': False,
         'gpu_used': False,
     }
+    if not diagnostic_contract['pat6_forensic_required']:
+        result.update(
+            {
+                'expected_patient_count': manifest_audit['patient_count'],
+                'expected_defect_condition_count': manifest_audit[
+                    'defect_condition_count'
+                ],
+                'expected_defect_instance_count': manifest_audit[
+                    'defect_instance_count'
+                ],
+                'pat6_case_count': manifest_audit['pat6_case_count'],
+                'per_fold_expected_case_counts': manifest_audit[
+                    'per_fold_case_counts'
+                ],
+            }
+        )
     complete_evaluation._write_json(
         Path(output_root) / 'diagnostic_manifest.json',
         result,
@@ -508,11 +640,19 @@ def _summary_with_provenance(
     legacy_cross_check,
 ) -> dict:
     expected_case_count = sum(manifest['total_cases'] for manifest in manifests)
-    expected_pat6 = _expected_pat6_count(manifests)
+    diagnostic_contract = get_diagnostic_protocol_contract(
+        diagnostic_protocol
+    )
+    expected_pat6 = (
+        _expected_pat6_count(manifests)
+        if diagnostic_contract['pat6_forensic_required']
+        else None
+    )
     summary = aggregate_diagnostic_cases(
         cases,
         expected_case_count=expected_case_count,
         expected_pat6_case_count=expected_pat6,
+        diagnostic_protocol=diagnostic_protocol,
     )
     return {
         'diagnostic_protocol_version': diagnostic_protocol[
@@ -578,7 +718,7 @@ def run_execute_diagnostic(
         checkpoint_metadata[fold_id] = metadata
         all_cases.extend(cases)
 
-    if tuple(fold_ids) == tuple(FOLD_SUBJECTS):
+    if tuple(fold_ids) == tuple(training_protocol['folds']):
         selected_legacy = list(legacy_results['authoritative_union'])
     else:
         selected_legacy = [
@@ -656,17 +796,17 @@ def run_execute_diagnostic(
         Path(output_root) / 'diagnostic_summary.json',
         root_summary,
     )
-    complete_evaluation._write_json(
-        Path(output_root) / 'pat6_forensic.json',
-        root_summary['pat6_forensic'],
-    )
+    if 'pat6_forensic' in root_summary:
+        complete_evaluation._write_json(
+            Path(output_root) / 'pat6_forensic.json',
+            root_summary['pat6_forensic'],
+        )
     return root_summary
 
 
 def run_evaluation(args) -> dict:
     """Validate safe selectors, source contracts, and execute one explicit mode."""
     mode = _explicit_mode(args)
-    fold_ids = _selected_fold_ids(args)
     legacy_results_root = getattr(args, 'legacy_results_root', None)
     if legacy_results_root is None:
         raise M3MetricDiagnosticContractError(
@@ -680,10 +820,21 @@ def run_evaluation(args) -> dict:
     training_protocol, evaluation_protocol, diagnostic_protocol = (
         _load_protocol_bundle(args)
     )
+    fold_ids = _selected_fold_ids(args, training_protocol)
     manifests = _all_manifests(training_protocol, evaluation_protocol)
+    _validate_manifest_contract(
+        training_protocol,
+        diagnostic_protocol,
+        manifests,
+        run_protocol_audit(training_protocol, evaluation_protocol),
+    )
     legacy_results = validate_legacy_result_tree(
         legacy_results_root,
-        {fold_id: manifests[fold_id]['cases'] for fold_id in FOLD_SUBJECTS},
+        {
+            fold_id: manifests[fold_id]['cases']
+            for fold_id in training_protocol['folds']
+        },
+        diagnostic_protocol=diagnostic_protocol,
     )
     if mode == 'audit-only':
         return run_audit_only(
@@ -771,6 +922,9 @@ if __name__ == '__main__':
 
 
 __all__ = [
+    'CLEAN10_DIAGNOSTIC_PROTOCOL',
+    'CLEAN10_EVALUATION_PROTOCOL',
+    'CLEAN10_TRAINING_PROTOCOL',
     'DEFAULT_DIAGNOSTIC_PROTOCOL',
     'DEFAULT_EVALUATION_PROTOCOL',
     'DEFAULT_OUTPUT_ROOT_NAME',

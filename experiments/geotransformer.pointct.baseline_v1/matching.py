@@ -132,7 +132,15 @@ class PointCTLogSinkhorn(nn.Module):
         u = torch.zeros_like(log_mu)
         v = torch.zeros_like(log_nu)
         for _ in range(self.sinkhorn_iterations):
-            row_logsumexp = torch.logsumexp(scores + v.unsqueeze(1), dim=2)
+            row_terms = scores + v.unsqueeze(1)
+            # Invalid rows contain only -Inf. Reduce finite placeholders so
+            # their discarded backward path cannot produce NaN gradients.
+            row_terms = torch.where(
+                row_valid.unsqueeze(2),
+                row_terms,
+                torch.zeros_like(row_terms),
+            )
+            row_logsumexp = torch.logsumexp(row_terms, dim=2)
             row_logsumexp = torch.where(
                 row_valid,
                 row_logsumexp,
@@ -140,7 +148,14 @@ class PointCTLogSinkhorn(nn.Module):
             )
             u = torch.where(row_valid, log_mu - row_logsumexp, negative_infinity)
 
-            col_logsumexp = torch.logsumexp(scores + u.unsqueeze(2), dim=1)
+            col_terms = scores + u.unsqueeze(2)
+            # Apply the same numerical guard to invalid columns.
+            col_terms = torch.where(
+                col_valid.unsqueeze(1),
+                col_terms,
+                torch.zeros_like(col_terms),
+            )
+            col_logsumexp = torch.logsumexp(col_terms, dim=1)
             col_logsumexp = torch.where(
                 col_valid,
                 col_logsumexp,

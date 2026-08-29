@@ -68,6 +68,7 @@ def iter_formal_defect_validation_samples(dataset, split, protocol):
 @contextmanager
 def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
     """Temporarily inject defect-aware boundaries into the reused M3 loop."""
+    m4_hard_constraint_active = enable_m4_defect_mapping
     originals = {
         'create_dataset': complete_training.create_dataset,
         '_resolve_training_contract': complete_training._resolve_training_contract,
@@ -107,6 +108,7 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
                     'val_instance_count': len(split.val_indices),
                     'test_instance_count': len(split.test_indices),
                     'enable_m4_defect_mapping': enable_m4_defect_mapping,
+                    'm4_hard_constraint_active': m4_hard_constraint_active,
                 },
                 sort_keys=True,
             )
@@ -119,6 +121,7 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
             raise DefectTrainingContractError('defect split provenance was not resolved.')
         record['defect_training_provenance'] = state['provenance']
         record['enable_m4_defect_mapping'] = enable_m4_defect_mapping
+        record['m4_hard_constraint_active'] = m4_hard_constraint_active
         return record
 
     def append_defect_json_log(path, record):
@@ -126,6 +129,7 @@ def _install_defect_adapter(protocol, *, enable_m4_defect_mapping):
         if state['provenance'] is not None:
             enriched['defect_training_provenance'] = state['provenance']
             enriched['enable_m4_defect_mapping'] = enable_m4_defect_mapping
+            enriched['m4_hard_constraint_active'] = m4_hard_constraint_active
         return originals['_append_json_log'](path, enriched)
 
     complete_training.create_dataset = defect_dataset_factory
@@ -159,6 +163,7 @@ def run_defect_training(args):
     output = dict(result)
     output['defect_training_provenance'] = state['provenance']
     output['enable_m4_defect_mapping'] = enabled
+    output['m4_hard_constraint_active'] = enabled
     return output
 
 
@@ -193,7 +198,10 @@ def build_argument_parser():
     parser.add_argument(
         '--enable-m4-defect-mapping',
         action='store_true',
-        help='Explicitly derive M4 coarse mapping fields; omitted keeps frozen M3 preprocessing.',
+        help=(
+            'Explicitly derive M4 coarse mapping fields and activate the matching/supervision '
+            'hard constraint; omitted keeps the frozen M3 path.'
+        ),
     )
     return parser
 

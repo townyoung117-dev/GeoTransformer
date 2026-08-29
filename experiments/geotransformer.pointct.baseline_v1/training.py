@@ -18,6 +18,10 @@ import numpy as np
 import torch
 
 from gt_correspondence import build_coarse_gt_correspondence
+from m4_hard_constraint import (
+    build_m4_mask_aware_gt,
+    resolve_m4_matching_masks,
+)
 from matching_loss import compute_collision_aware_match_loss
 from training_protocol import (
     M3TrainingProtocolError,
@@ -516,20 +520,33 @@ def _build_gt_labels(
     device,
     primary_max_distance_mm,
     high_confidence_distance_mm,
+    *,
+    m4_hard_constraint_enabled,
+    point_valid_mask,
+    ct_valid_mask,
 ):
     _require_fields(
         sample,
         ('gt_transform', 'gt_transform_direction'),
         'sample GT metadata',
     )
-    correspondence = build_coarse_gt_correspondence(
-        Xp_phys_coarse=point_phys.detach().cpu().numpy(),
-        Xv_phys_coarse=ct_phys.detach().cpu().numpy(),
-        gt_transform=sample['gt_transform'],
-        gt_transform_direction=sample['gt_transform_direction'],
-        primary_max_distance_mm=primary_max_distance_mm,
-        high_confidence_distance_mm=high_confidence_distance_mm,
-    )
+    correspondence_kwargs = {
+        'Xp_phys_coarse': point_phys.detach().cpu().numpy(),
+        'Xv_phys_coarse': ct_phys.detach().cpu().numpy(),
+        'gt_transform': sample['gt_transform'],
+        'gt_transform_direction': sample['gt_transform_direction'],
+        'primary_max_distance_mm': primary_max_distance_mm,
+        'high_confidence_distance_mm': high_confidence_distance_mm,
+    }
+    if m4_hard_constraint_enabled:
+        correspondence = build_m4_mask_aware_gt(
+            **correspondence_kwargs,
+            point_valid_mask=point_valid_mask,
+            ct_valid_mask=ct_valid_mask,
+        )
+    else:
+        # Preserve the frozen M3 builder call exactly when no M4 artifacts exist.
+        correspondence = build_coarse_gt_correspondence(**correspondence_kwargs)
     _require_fields(
         correspondence,
         ('gt_primary_ct_index', 'gt_primary_valid', 'gt_high_confidence'),
@@ -576,8 +593,9 @@ def _forward_and_loss(
     point_output = point_encoder(point_input)
     ct_output = ct_encoder(ct_input)
     q, k, point_phys, ct_phys = _require_encoder_outputs(point_output, ct_output, device)
-    point_valid_mask = torch.ones((q.shape[0],), dtype=torch.bool, device=device)
-    ct_valid_mask = torch.ones((k.shape[0],), dtype=torch.bool, device=device)
+    hard_constraint = resolve_m4_matching_masks(point_output, ct_output, device)
+    point_valid_mask = hard_constraint['point_valid_mask']
+    ct_valid_mask = hard_constraint['ct_valid_mask']
 
     matcher_output = matcher(
         q=q,
@@ -591,8 +609,22 @@ def _forward_and_loss(
         'PointCTMatcher output',
     )
     log_assignment = matcher_output['log_assignment']
-    point_valid_mask = matcher_output['point_valid_mask']
-    ct_valid_mask = matcher_output['ct_valid_mask']
+    matcher_point_valid_mask = matcher_output['point_valid_mask']
+    matcher_ct_valid_mask = matcher_output['ct_valid_mask']
+    if (
+        not torch.is_tensor(matcher_point_valid_mask)
+        or not torch.equal(matcher_point_valid_mask, point_valid_mask)
+    ):
+        raise M3TrainingContractError(
+            'PointCTMatcher changed the resolved Point hard-constraint mask.'
+        )
+    if (
+        not torch.is_tensor(matcher_ct_valid_mask)
+        or not torch.equal(matcher_ct_valid_mask, ct_valid_mask)
+    ):
+        raise M3TrainingContractError(
+            'PointCTMatcher changed the resolved CT hard-constraint mask.'
+        )
     if not torch.is_tensor(log_assignment) or log_assignment.device != device:
         raise M3TrainingContractError('log_assignment must be a tensor on the requested device.')
     if log_assignment.dtype != torch.float32:
@@ -607,6 +639,9 @@ def _forward_and_loss(
         device,
         primary_max_distance_mm,
         high_confidence_distance_mm,
+        m4_hard_constraint_enabled=hard_constraint['enabled'],
+        point_valid_mask=point_valid_mask,
+        ct_valid_mask=ct_valid_mask,
     )
     loss_output = compute_collision_aware_match_loss(
         log_assignment,
@@ -634,6 +669,16 @@ def _forward_and_loss(
             'Np': int(q.shape[0]),
             'Nv': int(k.shape[0]),
             'num_high_confidence_points': high_confidence_count,
+            'm4_hard_constraint_enabled': hard_constraint['enabled'],
+            'point_total_tokens': hard_constraint['point_total_count'],
+            'point_intact_tokens': hard_constraint['point_intact_count'],
+            'point_excluded_tokens': hard_constraint['point_excluded_count'],
+            'ct_total_tokens': hard_constraint['ct_total_count'],
+            'ct_intact_tokens': hard_constraint['ct_intact_count'],
+            'ct_excluded_tokens': hard_constraint['ct_excluded_count'],
+            'num_supervised_points_after_mask': int(
+                loss_output['num_supervised_points']
+            ),
         }
     )
     return result

@@ -26,6 +26,10 @@ from m4_soft_modulation import (
     M4SoftModulationError,
     run_m4_soft_modulated_matching,
 )
+from m4_osseous_integration import (
+    M4OsseousIntegrationError,
+    run_m4_osseous_integrated_matching,
+)
 from matching_loss import compute_collision_aware_match_loss
 from training_protocol import (
     M3TrainingProtocolError,
@@ -473,7 +477,16 @@ def _sample_subject_id(sample):
     return subject_id
 
 
-def _prepare_model_inputs(sample, point_collate_fn, ct_collate_fn, device):
+def _prepare_model_inputs(
+    sample,
+    point_collate_fn,
+    ct_collate_fn,
+    device,
+    *,
+    include_osseous_ct_metadata=False,
+):
+    if not isinstance(include_osseous_ct_metadata, bool):
+        raise M3TrainingContractError('include_osseous_ct_metadata must be bool.')
     subject_id = _sample_subject_id(sample)
     point_batch = point_collate_fn([sample])
     ct_batch = ct_collate_fn([sample])
@@ -481,10 +494,15 @@ def _prepare_model_inputs(sample, point_collate_fn, ct_collate_fn, device):
     _require_fields(ct_batch, ('subject_id', 'ct'), 'CT batch')
     if point_batch['subject_id'] != subject_id or ct_batch['subject_id'] != subject_id:
         raise M3TrainingContractError('preprocessing changed the sample subject identity.')
-    return (
-        assemble_point_encoder_input(point_batch['point'], device),
-        assemble_ct_encoder_input(ct_batch['ct'], device),
-    )
+    point_input = assemble_point_encoder_input(point_batch['point'], device)
+    ct_input = assemble_ct_encoder_input(ct_batch['ct'], device)
+    if not include_osseous_ct_metadata:
+        return point_input, ct_input
+
+    raw_fields = ('ct_volume', 'ct_spacing', 'ct_origin', 'ct_direction')
+    _require_fields(ct_batch['ct'], raw_fields, 'M4 osseous defective CT input')
+    osseous_ct_metadata = {field: ct_batch['ct'][field] for field in raw_fields}
+    return point_input, ct_input, osseous_ct_metadata
 
 
 def _require_encoder_outputs(point_output, ct_output, device):
@@ -590,15 +608,42 @@ def _forward_and_loss(
     m4_soft_modulation_enabled=False,
     m4_soft_sigma_mm=None,
     m4_soft_strength=None,
+    m4_osseous_prior_enabled=False,
+    m4_osseous_strength=None,
 ):
     if not isinstance(m4_soft_modulation_enabled, bool):
         raise M3TrainingContractError('m4_soft_modulation_enabled must be bool.')
-    point_input, ct_input = _prepare_model_inputs(
-        sample,
-        point_collate_fn,
-        ct_collate_fn,
-        device,
-    )
+    if not isinstance(m4_osseous_prior_enabled, bool):
+        raise M3TrainingContractError('m4_osseous_prior_enabled must be bool.')
+    if m4_osseous_prior_enabled and not m4_soft_modulation_enabled:
+        raise M3TrainingContractError(
+            'M4 osseous prior requires active M4 soft modulation.'
+        )
+    if m4_osseous_prior_enabled:
+        m4_osseous_strength = _require_finite_float(
+            m4_osseous_strength,
+            'm4_osseous_strength',
+            allow_zero=True,
+        )
+        point_input, ct_input, osseous_ct_metadata = _prepare_model_inputs(
+            sample,
+            point_collate_fn,
+            ct_collate_fn,
+            device,
+            include_osseous_ct_metadata=True,
+        )
+    else:
+        if m4_osseous_strength is not None:
+            raise M3TrainingContractError(
+                'm4_osseous_strength requires m4_osseous_prior_enabled=true.'
+            )
+        point_input, ct_input = _prepare_model_inputs(
+            sample,
+            point_collate_fn,
+            ct_collate_fn,
+            device,
+        )
+        osseous_ct_metadata = None
     point_output = point_encoder(point_input)
     ct_output = ct_encoder(ct_input)
     q, k, point_phys, ct_phys = _require_encoder_outputs(point_output, ct_output, device)
@@ -624,7 +669,64 @@ def _forward_and_loss(
         'modulated_similarity_mean': None,
         'soft_similarity_changed': False,
     }
-    if m4_soft_modulation_enabled:
+    osseous_diagnostics = {
+        'm4_osseous_prior_enabled': False,
+        'm4_osseous_prior_active': False,
+        'm4_osseous_strength': None,
+        'osseous_strength': None,
+        'osseous_center_hu': None,
+        'osseous_tau_hu': None,
+        'osseous_radius_mm': None,
+        'osseous_score_min': None,
+        'osseous_score_mean': None,
+        'osseous_score_max': None,
+        'osseous_pair_reliability_min': None,
+        'osseous_pair_reliability_mean': None,
+        'osseous_pair_reliability_max': None,
+        'osseous_penalty_min': None,
+        'osseous_penalty_mean': None,
+        'osseous_penalty_max': None,
+        'final_modulation_min': None,
+        'final_modulation_mean': None,
+        'final_modulation_max': None,
+        'final_similarity_mean': None,
+        'osseous_similarity_changed': False,
+    }
+    if m4_osseous_prior_enabled:
+        if hard_constraint['enabled'] is not True:
+            raise M3TrainingContractError(
+                'M4 osseous prior requires active M4 defect mapping and hard masks.'
+            )
+        try:
+            matcher_output = run_m4_osseous_integrated_matching(
+                q=q,
+                k=k,
+                point_coordinates_mm=point_phys,
+                ct_token_locations_mm=ct_phys,
+                point_valid_mask=point_valid_mask,
+                ct_valid_mask=ct_valid_mask,
+                sigma_mm=m4_soft_sigma_mm,
+                soft_strength=m4_soft_strength,
+                osseous_strength=m4_osseous_strength,
+                matcher=matcher,
+                defective_ct_volume=osseous_ct_metadata['ct_volume'],
+                ct_spacing=osseous_ct_metadata['ct_spacing'],
+                ct_origin=osseous_ct_metadata['ct_origin'],
+                ct_direction=osseous_ct_metadata['ct_direction'],
+                support_locations_mm=ct_input['ct_support_phys_20mm'],
+            )
+        except M4OsseousIntegrationError as error:
+            raise M3TrainingContractError(
+                f'M4 osseous-integrated matching failed: {error}'
+            ) from error
+        for field in tuple(soft_diagnostics):
+            if field == 'modulated_similarity_mean':
+                soft_diagnostics[field] = matcher_output['soft_similarity_mean']
+            else:
+                soft_diagnostics[field] = matcher_output[field]
+        for field in tuple(osseous_diagnostics):
+            osseous_diagnostics[field] = matcher_output[field]
+    elif m4_soft_modulation_enabled:
         if hard_constraint['enabled'] is not True:
             raise M3TrainingContractError(
                 'M4 soft modulation requires active M4 defect mapping and hard masks.'
@@ -733,6 +835,7 @@ def _forward_and_loss(
                 loss_output['num_supervised_points']
             ),
             **soft_diagnostics,
+            **osseous_diagnostics,
         }
     )
     return result
@@ -768,6 +871,8 @@ def run_training_step(
     m4_soft_modulation_enabled=False,
     m4_soft_sigma_mm=None,
     m4_soft_strength=None,
+    m4_osseous_prior_enabled=False,
+    m4_osseous_strength=None,
 ):
     """Run one batch-size-one FP32 optimizer step with the formal M3-3 loss."""
     device = torch.device(device)
@@ -791,6 +896,8 @@ def run_training_step(
         m4_soft_modulation_enabled=m4_soft_modulation_enabled,
         m4_soft_sigma_mm=m4_soft_sigma_mm,
         m4_soft_strength=m4_soft_strength,
+        m4_osseous_prior_enabled=m4_osseous_prior_enabled,
+        m4_osseous_strength=m4_osseous_strength,
     )
     loss = result['loss']
     if not loss.requires_grad:
@@ -820,6 +927,8 @@ def run_validation_step(
     m4_soft_modulation_enabled=False,
     m4_soft_sigma_mm=None,
     m4_soft_strength=None,
+    m4_osseous_prior_enabled=False,
+    m4_osseous_strength=None,
 ):
     """Run one batch-size-one FP32 validation forward and restore prior modes."""
     device = torch.device(device)
@@ -843,6 +952,8 @@ def run_validation_step(
                 m4_soft_modulation_enabled=m4_soft_modulation_enabled,
                 m4_soft_sigma_mm=m4_soft_sigma_mm,
                 m4_soft_strength=m4_soft_strength,
+                m4_osseous_prior_enabled=m4_osseous_prior_enabled,
+                m4_osseous_strength=m4_osseous_strength,
             )
         if result['loss'].requires_grad:
             raise M3TrainingContractError('validation loss must not require gradients.')

@@ -1,0 +1,389 @@
+{
+  "protocol_version": "m4_osseous_strength_selection_clean10_v1",
+  "protocol_sha256": "a03a3cd030830c58844d10163a34d10a7db635181a2da5ed1681d09aa802ca38",
+  "protocol_status": "FROZEN_BEFORE_GPU_SELECTION",
+  "expected_branch": "m4_osseous_strength_selection_v1",
+  "base_commit": "d6a10cf092089426307b5f93766b8c5a5a2636f9",
+  "scope": "M4-2D osseous-strength train/validation-only selection",
+  "hash_contract": {
+    "algorithm": "SHA-256",
+    "exclude_top_level_fields": [
+      "protocol_sha256"
+    ],
+    "serialization": "json.dumps(sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False)",
+    "encoding": "UTF-8"
+  },
+  "source_protocols": {
+    "clean10_training": {
+      "path": "experiments/geotransformer.pointct.baseline_v1/protocols/m3_6b_5fold_clean10_v2.json",
+      "protocol_version": "m3_6b_5fold_clean10_v2",
+      "canonical_sha256": "34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c"
+    },
+    "formal_training_settings": {
+      "path": "experiments/geotransformer.pointct.baseline_v1/protocols/m3_defect_eval_clean10_v2.json",
+      "protocol_version": "m3_defect_eval_clean10_v2",
+      "canonical_sha256": "cfd519b923be3b623cffec8c8f5830cb5b1160859461180eddeb7134a0adb6b0"
+    },
+    "origin_invariant_metrics": {
+      "path": "experiments/geotransformer.pointct.baseline_v1/protocols/m3_metric_diagnostic_clean10_v2.json",
+      "protocol_version": "m3_metric_diagnostic_clean10_v2",
+      "canonical_sha256": "5f40c322433c2274d356213969f9041d2931ff0e058efb0c541bcf5e1a9624bc"
+    }
+  },
+  "lambda_oss_grid": [
+    0.25,
+    0.5,
+    1.0,
+    2.0
+  ],
+  "clean10": {
+    "ready_subject_ids": [
+      "Pat1",
+      "Pat2",
+      "Pat3",
+      "Pat4",
+      "Pat5",
+      "Pat7",
+      "Pat8",
+      "Pat9",
+      "Pat11",
+      "Pat12"
+    ],
+    "excluded_subject_ids": [
+      "Pat6"
+    ],
+    "folds": {
+      "Fold1": {
+        "train_subject_ids": [
+          "Pat11",
+          "Pat3",
+          "Pat8",
+          "Pat9",
+          "Pat1",
+          "Pat2"
+        ],
+        "val_subject_ids": [
+          "Pat7",
+          "Pat4"
+        ],
+        "test_subject_ids": [
+          "Pat12",
+          "Pat5"
+        ]
+      },
+      "Fold2": {
+        "train_subject_ids": [
+          "Pat12",
+          "Pat5",
+          "Pat8",
+          "Pat9",
+          "Pat1",
+          "Pat2"
+        ],
+        "val_subject_ids": [
+          "Pat11",
+          "Pat3"
+        ],
+        "test_subject_ids": [
+          "Pat7",
+          "Pat4"
+        ]
+      },
+      "Fold3": {
+        "train_subject_ids": [
+          "Pat12",
+          "Pat5",
+          "Pat7",
+          "Pat4",
+          "Pat1",
+          "Pat2"
+        ],
+        "val_subject_ids": [
+          "Pat8",
+          "Pat9"
+        ],
+        "test_subject_ids": [
+          "Pat11",
+          "Pat3"
+        ]
+      },
+      "Fold4": {
+        "train_subject_ids": [
+          "Pat12",
+          "Pat5",
+          "Pat7",
+          "Pat4",
+          "Pat11",
+          "Pat3"
+        ],
+        "val_subject_ids": [
+          "Pat1",
+          "Pat2"
+        ],
+        "test_subject_ids": [
+          "Pat8",
+          "Pat9"
+        ]
+      },
+      "Fold5": {
+        "train_subject_ids": [
+          "Pat7",
+          "Pat4",
+          "Pat11",
+          "Pat3",
+          "Pat8",
+          "Pat9"
+        ],
+        "val_subject_ids": [
+          "Pat12",
+          "Pat5"
+        ],
+        "test_subject_ids": [
+          "Pat1",
+          "Pat2"
+        ]
+      }
+    }
+  },
+  "defect_conditions": [
+    "defect_001_left_maxilla_cheek_small",
+    "defect_001_left_maxilla_cheek_medium",
+    "defect_001_left_maxilla_cheek_large",
+    "defect_001_right_maxilla_cheek_small",
+    "defect_001_right_maxilla_cheek_medium"
+  ],
+  "training_settings": {
+    "budget": "full_selection_budget",
+    "epochs": 20,
+    "seed": 20260815,
+    "perturbation_seed_scheme_version": "m3_6b_seed_v1",
+    "perturbation_root_seed": 20260815,
+    "optimizer": {
+      "name": "AdamW",
+      "learning_rate": 0.0003,
+      "weight_decay": 0.0001,
+      "other_arguments": "torch.optim.AdamW defaults at base_commit"
+    },
+    "scheduler": {
+      "name": "none",
+      "learning_rate_policy": "constant"
+    },
+    "batch_size": 1,
+    "precision": "fp32",
+    "temperature": 0.1,
+    "sinkhorn_iterations": 20,
+    "alpha_init": 1.0,
+    "m4_hard": {
+      "enable_m4_defect_mapping": true,
+      "hard_constraint_active": true
+    },
+    "m4_soft": {
+      "enable_m4_soft_modulation": true,
+      "sigma_mm": 60.0,
+      "strength": 2.0,
+      "freeze_rationale": "sigma is three 20 mm coarse-support cells; strength is the common M4 osseous integration fixture value; both are fixed before GPU selection"
+    },
+    "osseous_score": {
+      "center_hu": 300.0,
+      "tau_hu": 100.0,
+      "radius_mm": 20.0
+    },
+    "osseous_integration": {
+      "pair_reliability_formula": "R_oss[i,j] = R_soft[i,j] * o_j",
+      "final_similarity_formula": "S_final[i,j] = S_soft[i,j] - lambda_oss * (1 - R_oss[i,j])"
+    },
+    "only_variable_across_candidates": "lambda_oss"
+  },
+  "checkpoint_selection": {
+    "scope": "validation_only",
+    "objective": "mean validation training loss across the frozen validation defect/severity cases",
+    "direction": "minimize",
+    "comparison": "strict_less_than",
+    "equal_value_policy": "keep_earliest_epoch",
+    "required_basename": "best_val_loss.pt",
+    "required_records": [
+      "best_epoch",
+      "best_val_objective",
+      "checkpoint_path",
+      "checkpoint_sha256"
+    ]
+  },
+  "validation_protocol": {
+    "perturbations": [
+      {
+        "purpose": "val",
+        "severity": "mild",
+        "max_rotation_deg": 5.0,
+        "max_translation_mm": 5.0,
+        "variant_id": 0
+      },
+      {
+        "purpose": "val",
+        "severity": "moderate",
+        "max_rotation_deg": 10.0,
+        "max_translation_mm": 10.0,
+        "variant_id": 0
+      },
+      {
+        "purpose": "val",
+        "severity": "hard",
+        "max_rotation_deg": 20.0,
+        "max_translation_mm": 20.0,
+        "variant_id": 0
+      }
+    ],
+    "expected_cases_per_patient": 15,
+    "expected_patients_per_fold": 2,
+    "expected_cases_per_fold": 30,
+    "expected_unique_patients_per_lambda": 10,
+    "expected_cases_per_lambda": 150,
+    "case_identity": [
+      "lambda_oss",
+      "fold_id",
+      "subject_id",
+      "defect_id",
+      "severity",
+      "variant_id",
+      "perturbation_seed"
+    ],
+    "metric_definitions": {
+      "centroid_tre_mm": "norm((R_pred*c+t_pred)-(R_gt*c+t_gt)), c=mean(augmented defective source points)",
+      "point_tre_mean_mm": "mean_i norm((R_pred*x_i+t_pred)-(R_gt*x_i+t_gt)) over augmented defective source points",
+      "rre_deg": "rotation error in degrees between predicted and effective ground-truth rotations",
+      "legacy_parameter_rte_mm": "descriptive only; forbidden as a lambda selection metric",
+      "registration_recall": "descriptive only; forbidden as a lambda selection metric"
+    },
+    "solver_failure_policy": {
+      "failed_case_metrics": "null",
+      "patient_metrics": "median over solver-success cases only",
+      "zero_success_patient": "candidate is incomplete and selection is forbidden",
+      "failures_remain_in_denominator": true
+    },
+    "patient_level_collapse": {
+      "unit": "unique subject_id",
+      "synthetic_defects_are_independent_patients": false,
+      "within_patient_statistic": "median",
+      "metrics": [
+        "centroid_tre_mm",
+        "point_tre_mean_mm",
+        "rre_deg"
+      ]
+    },
+    "lambda_level_statistics": {
+      "unit_count": 10,
+      "statistics": [
+        "mean",
+        "median",
+        "p95_linear",
+        "best_patient",
+        "worst_patient"
+      ]
+    }
+  },
+  "selection_rule": {
+    "eligibility": "all four lambdas, all five folds, exactly ten unique validation patients per lambda, complete case identities, and no zero-success patient",
+    "primary": {
+      "metric": "median of the 10 patient-level median centroid_tre_mm values",
+      "direction": "minimize",
+      "practical_tie_threshold_mm": 0.25
+    },
+    "secondary": {
+      "metric": "median of the 10 patient-level median point_tre_mean_mm values",
+      "direction": "minimize",
+      "practical_tie_threshold_mm": 0.25
+    },
+    "tertiary": {
+      "metric": "median of the 10 patient-level median rre_deg values",
+      "direction": "minimize",
+      "practical_tie_threshold_deg": 0.25
+    },
+    "deterministic_algorithm": [
+      "Retain candidates whose primary value is at most 0.25 mm above the minimum primary value.",
+      "Among survivors, retain candidates whose secondary value is at most 0.25 mm above the minimum secondary value.",
+      "Among survivors, retain candidates whose tertiary value is at most 0.25 deg above the minimum tertiary value.",
+      "Select the smallest lambda_oss among remaining candidates."
+    ],
+    "final_output_key": "SELECTED_LAMBDA_OSS",
+    "selection_before_complete_five_fold_grid": "forbidden"
+  },
+  "validation_only_artifact": {
+    "basename": "validation_cases.jsonl",
+    "scope_field": {
+      "name": "artifact_scope",
+      "required_value": "validation_only"
+    },
+    "required_case_fields": [
+      "artifact_scope",
+      "protocol_version",
+      "protocol_sha256",
+      "lambda_oss",
+      "fold_id",
+      "subject_id",
+      "defect_id",
+      "severity",
+      "variant_id",
+      "perturbation_seed",
+      "solver_success",
+      "solver_status",
+      "registration_recall_hit",
+      "centroid_tre_mm",
+      "point_tre_mean_mm",
+      "rre_deg"
+    ],
+    "forbidden_result_key_token": "test",
+    "duplicate_json_keys": "reject",
+    "unexpected_case_fields": "reject"
+  },
+  "no_test_firewall": {
+    "test_sample_loading": "forbidden",
+    "test_evaluation": "forbidden",
+    "test_metrics_for_checkpoint_or_lambda_selection": "forbidden",
+    "test_result_root_argument": "forbidden",
+    "training_split_policy": "train indices only",
+    "checkpoint_split_policy": "validation criterion only",
+    "lambda_comparison_policy": "validation patients only",
+    "upstream_test_ids_may_exist_only_as_unread_provenance": true,
+    "aggregator_input_policy": "only allowlisted validation-only artifacts; reject result keys or values that claim test scope",
+    "forbidden_entrypoints": [
+      "evaluate_m3.py --execute-test",
+      "evaluate_m3_defect.py --execute-test",
+      "evaluate_m3_defect_metric_diagnostic.py --execute-diagnostic on test manifests"
+    ]
+  },
+  "output_layout": {
+    "root": "checkpoints/m4_osseous_strength_selection_v1",
+    "lambda_directories": {
+      "0.25": "lambda_0p25",
+      "0.5": "lambda_0p50",
+      "1.0": "lambda_1p00",
+      "2.0": "lambda_2p00"
+    },
+    "fold_directories": [
+      "fold1",
+      "fold2",
+      "fold3",
+      "fold4",
+      "fold5"
+    ],
+    "per_fold": {
+      "checkpoint_directory": "checkpoints",
+      "training_jsonl": "train.jsonl",
+      "training_log": "train.log",
+      "validation_directory": "validation",
+      "checkpoint_record": "checkpoint_record.json",
+      "completion_marker": "SELECTION_FOLD_COMPLETE.json"
+    },
+    "overwrite_policy": "fail closed on a non-empty incomplete fold directory; skip only a fully validated completion marker"
+  },
+  "execution_constraints": {
+    "fail_fast": true,
+    "independent_fold_lambda_logs": true,
+    "safe_completion_detection": true,
+    "tmux_or_screen": "not used",
+    "nohup_compatible": true,
+    "gpu_training_during_protocol_implementation": false,
+    "autodl_during_protocol_implementation": false,
+    "commit_during_protocol_implementation": false,
+    "push_during_protocol_implementation": false
+  }
+}

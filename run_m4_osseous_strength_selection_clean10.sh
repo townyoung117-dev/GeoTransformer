@@ -92,6 +92,55 @@ readonly EXPECTED_SELECTION_SHA256='a03a3cd030830c58844d10163a34d10a7db635181a2d
 readonly EXPECTED_TRAINING_PROTOCOL_SHA256='34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c'
 readonly EXPECTED_BRANCH='m4_osseous_strength_selection_v1'
 readonly EXPECTED_BASE_COMMIT='d6a10cf092089426307b5f93766b8c5a5a2636f9'
+readonly -a PROVENANCE_ALLOWED_PATHS=(
+  'M4_OSSEOUS_STRENGTH_SELECTION_CLEAN10_V1_PROTOCOL.md'
+  'experiments/geotransformer.pointct.baseline_v1/aggregate_m4_osseous_strength_selection.py'
+  'experiments/geotransformer.pointct.baseline_v1/evaluate_m4_osseous_strength_validation.py'
+  'experiments/geotransformer.pointct.baseline_v1/protocols/m4_osseous_strength_selection_clean10_v1.json'
+  'experiments/geotransformer.pointct.baseline_v1/protocols/m4_osseous_strength_selection_clean10_v1.sha256'
+  'run_m4_osseous_strength_selection_clean10.sh'
+  'tests/pointct/test_m4_osseous_strength_selection.py'
+)
+
+verify_git_provenance() {
+  local actual_branch
+  local actual_commit
+  local changed_paths
+  local changed_path
+  local allowed_path
+  local path_is_allowed
+
+  actual_branch="$(git -C "${REPO_ROOT}" branch --show-current)" \
+    || die 'Cannot determine the current Git branch.'
+  actual_commit="$(git -C "${REPO_ROOT}" rev-parse HEAD)" \
+    || die 'Cannot determine the current Git HEAD.'
+  [[ "${actual_branch}" == "${EXPECTED_BRANCH}" ]] \
+    || die "Branch differs from frozen protocol: expected=${EXPECTED_BRANCH}, actual=${actual_branch}"
+  git -C "${REPO_ROOT}" merge-base --is-ancestor \
+    "${EXPECTED_BASE_COMMIT}" "${actual_commit}" \
+    || die "Frozen base commit is not an ancestor of HEAD: base=${EXPECTED_BASE_COMMIT}, HEAD=${actual_commit}"
+  git -C "${REPO_ROOT}" diff --quiet --exit-code -- \
+    || die 'Tracked worktree is dirty; refusing provenance verification.'
+  git -C "${REPO_ROOT}" diff --cached --quiet --exit-code -- \
+    || die 'Staged index is dirty; refusing provenance verification.'
+
+  changed_paths="$(
+    git -c core.quotePath=true -C "${REPO_ROOT}" diff \
+      --name-only --no-renames "${EXPECTED_BASE_COMMIT}..${actual_commit}" --
+  )" || die 'Cannot enumerate tracked paths changed since the frozen base commit.'
+  while IFS= read -r changed_path; do
+    [[ -n "${changed_path}" ]] || continue
+    path_is_allowed=0
+    for allowed_path in "${PROVENANCE_ALLOWED_PATHS[@]}"; do
+      if [[ "${changed_path}" == "${allowed_path}" ]]; then
+        path_is_allowed=1
+        break
+      fi
+    done
+    [[ "${path_is_allowed}" -eq 1 ]] \
+      || die "Tracked path changed outside the frozen M4-2D allowlist: ${changed_path}"
+  done <<< "${changed_paths}"
+}
 
 for required_file in \
   "${SELECTION_PROTOCOL}" \
@@ -103,16 +152,7 @@ for required_file in \
 done
 
 command -v git >/dev/null 2>&1 || die 'Git is required to verify the frozen code base.'
-actual_branch="$(git -C "${REPO_ROOT}" branch --show-current)"
-actual_commit="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-[[ "${actual_branch}" == "${EXPECTED_BRANCH}" ]] \
-  || die "Branch differs from frozen protocol: expected=${EXPECTED_BRANCH}, actual=${actual_branch}"
-[[ "${actual_commit}" == "${EXPECTED_BASE_COMMIT}" ]] \
-  || die "HEAD differs from frozen protocol: expected=${EXPECTED_BASE_COMMIT}, actual=${actual_commit}"
-git -C "${REPO_ROOT}" diff --quiet --exit-code -- \
-  || die 'Tracked worktree differs from the frozen base commit.'
-git -C "${REPO_ROOT}" diff --cached --quiet --exit-code -- \
-  || die 'Staged tracked content differs from the frozen base commit.'
+verify_git_provenance
 
 verify_canonical_json_hash \
   "${SELECTION_PROTOCOL}" \

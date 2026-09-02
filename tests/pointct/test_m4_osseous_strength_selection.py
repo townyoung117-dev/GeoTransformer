@@ -2,6 +2,9 @@ import copy
 import hashlib
 import json
 import math
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +20,12 @@ PROTOCOL_PATH = (
 )
 SIDECAR_PATH = PROTOCOL_PATH.with_suffix('.sha256')
 RUN_SCRIPT_PATH = PROJECT_ROOT / 'run_m4_osseous_strength_selection_clean10.sh'
+GIT_PATH = shutil.which('git')
+BASH_PATH = shutil.which('bash')
+if BASH_PATH is None and os.name == 'nt':
+    candidate = Path(r'C:\Program Files\Git\bin\bash.exe')
+    if candidate.is_file():
+        BASH_PATH = str(candidate)
 
 if str(EXPERIMENT_DIR) not in sys.path:
     sys.path.insert(0, str(EXPERIMENT_DIR))
@@ -307,6 +316,201 @@ class FrozenProtocolAndInterfaceTest(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises(aggregator.M4OsseousStrengthAggregationError):
                     call()
+
+
+@unittest.skipUnless(
+    GIT_PATH is not None and BASH_PATH is not None,
+    'Git and bash are required for runner provenance tests.',
+)
+class RunnerProvenanceRegressionTest(unittest.TestCase):
+    _EXPECTED_BRANCH = 'm4_osseous_strength_selection_v1'
+    _FROZEN_BASE = 'd6a10cf092089426307b5f93766b8c5a5a2636f9'
+
+    @staticmethod
+    def _write(root, relative_path, content):
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding='utf-8', newline='\n')
+        return path
+
+    @staticmethod
+    def _git(root, *arguments):
+        return subprocess.run(
+            [GIT_PATH, *arguments],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+        )
+
+    def _make_repository(
+        self,
+        *,
+        branch=None,
+        unrelated_base=False,
+        unexpected_tracked_path=False,
+    ):
+        temporary = tempfile.TemporaryDirectory()
+        root = Path(temporary.name)
+        branch = branch or self._EXPECTED_BRANCH
+        self._git(root, 'init', '-b', branch)
+        self._git(root, 'config', 'user.name', 'M4 Provenance Test')
+        self._git(root, 'config', 'user.email', 'm4-provenance@example.invalid')
+        self._git(root, 'config', 'core.autocrlf', 'false')
+        self._git(root, 'config', 'core.filemode', 'false')
+
+        experiment = Path('experiments/geotransformer.pointct.baseline_v1')
+        self._write(
+            root,
+            experiment / 'protocols/m3_6b_5fold_clean10_v2.json',
+            '{}\n',
+        )
+        self._write(root, experiment / 'train_m3_defect.py', '# base fixture\n')
+        self._git(root, 'add', '--all')
+        self._git(root, 'commit', '-m', 'fixture base')
+        base_commit = self._git(root, 'rev-parse', 'HEAD').stdout.strip()
+
+        expected_base = base_commit
+        if unrelated_base:
+            base_tree = self._git(
+                root, 'rev-parse', f'{base_commit}^{{tree}}'
+            ).stdout.strip()
+            expected_base = self._git(
+                root, 'commit-tree', base_tree, '-m', 'unrelated fixture base'
+            ).stdout.strip()
+
+        runner = RUN_SCRIPT_PATH.read_text(encoding='utf-8')
+        self.assertEqual(runner.count(self._FROZEN_BASE), 1)
+        runner = runner.replace(self._FROZEN_BASE, expected_base, 1)
+        allowlisted_files = {
+            Path('M4_OSSEOUS_STRENGTH_SELECTION_CLEAN10_V1_PROTOCOL.md'):
+                '# fixture protocol\n',
+            experiment / 'aggregate_m4_osseous_strength_selection.py':
+                '# fixture aggregator\n',
+            experiment / 'evaluate_m4_osseous_strength_validation.py':
+                '# fixture producer\n',
+            experiment / 'protocols/m4_osseous_strength_selection_clean10_v1.json':
+                '{}\n',
+            experiment / 'protocols/m4_osseous_strength_selection_clean10_v1.sha256':
+                'fixture\n',
+            Path('run_m4_osseous_strength_selection_clean10.sh'): runner,
+            Path('tests/pointct/test_m4_osseous_strength_selection.py'):
+                '# fixture tests\n',
+        }
+        for relative_path, content in allowlisted_files.items():
+            self._write(root, relative_path, content)
+        if unexpected_tracked_path:
+            self._write(root, Path('geotransformer/unexpected_source.py'), '# forbidden\n')
+        self._git(root, 'add', '--all')
+        self._git(root, 'commit', '-m', 'fixture post-commit runner')
+        head_commit = self._git(root, 'rev-parse', 'HEAD').stdout.strip()
+        return temporary, root, base_commit, head_commit
+
+    @staticmethod
+    def _run_runner(root):
+        environment = os.environ.copy()
+        environment['DRY_RUN'] = '1'
+        environment['CUDA_VISIBLE_DEVICES'] = ''
+        environment.pop('PYTHON_BIN', None)
+        return subprocess.run(
+            [BASH_PATH, RUN_SCRIPT_PATH.name],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            env=environment,
+        )
+
+    def test_post_commit_descendant_allowlist_passes_provenance_and_reaches_sha_check(self):
+        temporary, root, base_commit, head_commit = self._make_repository()
+        try:
+            self.assertNotEqual(head_commit, base_commit)
+            result = self._run_runner(root)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('embedded protocol_sha256', combined)
+            self.assertNotIn('HEAD differs from frozen protocol', combined)
+            self.assertNotIn('not an ancestor of HEAD', combined)
+            self.assertNotIn('outside the frozen M4-2D allowlist', combined)
+        finally:
+            temporary.cleanup()
+
+    def test_non_ancestor_base_fails_closed(self):
+        temporary, root, _, _ = self._make_repository(unrelated_base=True)
+        try:
+            result = self._run_runner(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                'Frozen base commit is not an ancestor of HEAD',
+                result.stdout + result.stderr,
+            )
+        finally:
+            temporary.cleanup()
+
+    def test_tracked_change_outside_allowlist_fails_closed(self):
+        temporary, root, _, _ = self._make_repository(
+            unexpected_tracked_path=True
+        )
+        try:
+            result = self._run_runner(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                'Tracked path changed outside the frozen M4-2D allowlist',
+                result.stdout + result.stderr,
+            )
+        finally:
+            temporary.cleanup()
+
+    def test_dirty_tracked_worktree_fails_closed(self):
+        temporary, root, _, _ = self._make_repository()
+        try:
+            training_protocol = (
+                root
+                / 'experiments/geotransformer.pointct.baseline_v1'
+                / 'protocols/m3_6b_5fold_clean10_v2.json'
+            )
+            training_protocol.write_text('{"dirty":true}\n', encoding='utf-8')
+            result = self._run_runner(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                'Tracked worktree is dirty',
+                result.stdout + result.stderr,
+            )
+        finally:
+            temporary.cleanup()
+
+    def test_dirty_staged_index_fails_closed(self):
+        temporary, root, _, _ = self._make_repository()
+        try:
+            training_protocol = (
+                root
+                / 'experiments/geotransformer.pointct.baseline_v1'
+                / 'protocols/m3_6b_5fold_clean10_v2.json'
+            )
+            training_protocol.write_text('{"staged":true}\n', encoding='utf-8')
+            self._git(root, 'add', str(training_protocol.relative_to(root)))
+            result = self._run_runner(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                'Staged index is dirty',
+                result.stdout + result.stderr,
+            )
+        finally:
+            temporary.cleanup()
+
+    def test_wrong_branch_fails_closed(self):
+        temporary, root, _, _ = self._make_repository(branch='wrong_branch')
+        try:
+            result = self._run_runner(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                'Branch differs from frozen protocol',
+                result.stdout + result.stderr,
+            )
+        finally:
+            temporary.cleanup()
 
 
 class AggregatorCaseContractTest(unittest.TestCase):

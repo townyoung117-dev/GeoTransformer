@@ -272,6 +272,7 @@ if [[ "${DRY_RUN}" == '1' ]]; then
         --execute-validation
         --data-root "${DATA_ROOT_ARG}"
         --checkpoint "${checkpoint}"
+        --device cuda:0
       )
 
       combination_count=$((combination_count + 1))
@@ -394,6 +395,7 @@ for lambda_index in "${!LAMBDAS[@]}"; do
       --execute-validation
       --data-root "${DATA_ROOT_ARG}"
       --checkpoint "${checkpoint}"
+      --device cuda:0
     )
     verify_command=(
       "${PYTHON_BIN}"

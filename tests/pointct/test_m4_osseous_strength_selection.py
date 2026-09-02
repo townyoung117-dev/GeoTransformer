@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -293,6 +294,21 @@ class FrozenProtocolAndInterfaceTest(unittest.TestCase):
             self.assertNotIn(forbidden, producer_source)
             self.assertNotIn(forbidden, aggregator_source)
         self.assertNotIn('SELECTED_LAMBDA_OSS', RUN_SCRIPT_PATH.name)
+
+    def test_dry_run_and_live_validation_use_the_same_indexed_cuda_device(self):
+        script = RUN_SCRIPT_PATH.read_text(encoding='utf-8')
+        validation_blocks = re.findall(
+            r'^\s*validation_command=\(\n(.*?)^\s*\)$',
+            script,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertEqual(len(validation_blocks), 2)
+        normalized_blocks = [' '.join(block.split()) for block in validation_blocks]
+        self.assertEqual(normalized_blocks[0], normalized_blocks[1])
+        for block in validation_blocks:
+            self.assertIn('--execute-validation', block)
+            self.assertEqual(block.count('--device cuda:0'), 1)
+            self.assertNotRegex(block, r'--device\s+cuda(?:\s|$)')
 
     def test_all_public_protocol_driven_entries_reject_rehashed_mutation(self):
         mutated = copy.deepcopy(self.protocol)

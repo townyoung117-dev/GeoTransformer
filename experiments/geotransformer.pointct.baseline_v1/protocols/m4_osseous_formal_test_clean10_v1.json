@@ -1,0 +1,481 @@
+{
+  "protocol_version": "m4_osseous_formal_test_clean10_v1",
+  "protocol_status": "FROZEN_BEFORE_FIRST_M4_FORMAL_TEST",
+  "FORMAL_TEST_ACCESSED_AT_FREEZE": false,
+  "source_protocols": {
+    "clean10": {
+      "version": "m3_6b_5fold_clean10_v2",
+      "sha256": "34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c"
+    },
+    "evaluation": {
+      "version": "m3_defect_eval_clean10_v2",
+      "sha256": "cfd519b923be3b623cffec8c8f5830cb5b1160859461180eddeb7134a0adb6b0"
+    },
+    "diagnostic": {
+      "version": "m3_metric_diagnostic_clean10_v2",
+      "sha256": "5f40c322433c2274d356213969f9041d2931ff0e058efb0c541bcf5e1a9624bc"
+    },
+    "selection_v1": {
+      "version": "m4_osseous_strength_selection_clean10_v1",
+      "sha256": "a03a3cd030830c58844d10163a34d10a7db635181a2da5ed1681d09aa802ca38"
+    },
+    "amendment_v2": {
+      "version": "m4_osseous_strength_selection_clean10_v2_amendment",
+      "sha256": "fe59f307eca6355d835fad5a9a5d18f8b7f24b940747700149b7a5668413e13c"
+    }
+  },
+  "source_m4_implementation_commit": "f5bc5ab74a5d095ff2f26a8e35b914057731cda4",
+  "implementation_source_hash_policy": "SHA-256 over source bytes normalized from CRLF to LF, to preserve cross-platform Git checkout compatibility",
+  "implementation_source_sha256s": {
+    "experiments/geotransformer.pointct.baseline_v1/training_protocol.py": "3ab8743d00d0b739af45e707c418bdbce42ab22a619cb61feabdcc408d1b9807",
+    "experiments/geotransformer.pointct.baseline_v1/defect_evaluation.py": "e89ef61405c6d8d68c95f065c77a1eb84f9bab058e6abc06c52f714aae4ae5d9",
+    "experiments/geotransformer.pointct.baseline_v1/evaluation.py": "5d5bd9c5b11eb4d381e43e6ea0c5988e8ca1be23b2efd9e85e275a5579b745ca",
+    "experiments/geotransformer.pointct.baseline_v1/m3_metric_diagnostic.py": "39b92567a7e19a1f1362ae20fccebb3eb4986462b0c671735a9755f004e3c481",
+    "experiments/geotransformer.pointct.baseline_v1/perturbation.py": "0a858b38172c6b17c88df37bfe4b0e59ae711b974f349cf0776330f313aaff95",
+    "experiments/geotransformer.pointct.baseline_v1/evaluate_m3.py": "9a947862fceca2fb0bd74ffde025f5000edabab77d64225d8d8a1766946f4d20",
+    "experiments/geotransformer.pointct.baseline_v1/evaluate_m3_defect.py": "305f73fc1989495465b1713b34ed6a4991f3ab105e65f9ee6951d08623eeefd9",
+    "experiments/geotransformer.pointct.baseline_v1/evaluate_m3_defect_metric_diagnostic.py": "f454e163ada3c0b81207721fa4bb3a592a2303239e22d2299c73c32aae86cd2c",
+    "experiments/geotransformer.pointct.baseline_v1/evaluate_m4_osseous_prior.py": "cdd82df7072a2617b67436fb247db16021abdb70f5c447573fbc97f05490fd73",
+    "experiments/geotransformer.pointct.baseline_v1/evaluate_m4_hard_constraint.py": "e2f186986d13c4c56c6c50754e061faee36518e4d4ae1af834da83cb1154af46",
+    "experiments/geotransformer.pointct.baseline_v1/m4_hard_constraint.py": "14b9e137675d205b58ee9f97864fc6be458d40a974a87046f6b62224e66f12b3",
+    "experiments/geotransformer.pointct.baseline_v1/m4_soft_modulation.py": "bd6775229868677a4dcfc76bda7a8d9d5153820ff436f5aee4e8946715519a62",
+    "experiments/geotransformer.pointct.baseline_v1/m4_continuous_osseous_prior.py": "7c7c0476ffe0ce517759488ef22659adc02c27c915553a14ac6c919c813e3989",
+    "experiments/geotransformer.pointct.baseline_v1/m4_osseous_integration.py": "bce9bfcb00ef5cdf90f216c9d44ce0bd60bc79dddc3230e8b9c5e1413005f2a2",
+    "experiments/geotransformer.pointct.baseline_v1/matching_filter.py": "52c88e50772df2e52b86550ac9436e39dea75c8ed30885016729541549f37db9",
+    "experiments/geotransformer.pointct.baseline_v1/registration.py": "4984bc686cb04b0ed76fcceaa5b9d1fe5b4065bf87332fad40744caf756686cc",
+    "experiments/geotransformer.pointct.baseline_v1/training.py": "011b01b064369f96bf858902e979f207bb9798f7ebf745dcb1685207fae47b27",
+    "experiments/geotransformer.pointct.baseline_v1/config.py": "863100327b1d3299e2f7232acee8ab5aff9b86efe69fb2037e465a866d50afdb",
+    "experiments/geotransformer.pointct.baseline_v1/dataset.py": "bb1be038d939791fcaeb66df9fad0d47e329c0edf431e13f4966e642bcf786ef",
+    "experiments/geotransformer.pointct.baseline_v1/point_encoder.py": "1966a412aeb96e9535b92cb085ea8afaad6389dbbd7f26c951b44f8d754f06ab",
+    "experiments/geotransformer.pointct.baseline_v1/ct_encoder.py": "944e34c41e55ccd3a0197039384702e5a7d8c88773c7280ce1e06cbfa6d6e3d2",
+    "experiments/geotransformer.pointct.baseline_v1/matching.py": "dd43dfe18185682b907ac05da35ea4603420216f92b8cac13ccb61ca4a6f58ae",
+    "geotransformer/datasets/registration/pointct/dataset.py": "b9830ddd27d5965402c9f7e1a51404b0a9bb25f47f8b0f62dcb228b67aa9a74a"
+  },
+  "model": {
+    "hard_enabled": true,
+    "soft_enabled": true,
+    "osseous_enabled": true,
+    "soft_sigma_mm": 60.0,
+    "soft_strength": 2.0,
+    "osseous_center_hu": 300.0,
+    "osseous_tau_hu": 100.0,
+    "osseous_radius_mm": 20.0,
+    "lambda_oss": 0.5
+  },
+  "selection_provenance": {
+    "V1_STATUS": "FAILED_CLEANLY",
+    "V1_SELECTED_LAMBDA_OSS": null,
+    "V2_STATUS": "PASS",
+    "V2_SELECTION_BASIS": "POST_HOC_VALIDATION_ONLY",
+    "V2_SELECTED_LAMBDA_OSS": 0.5,
+    "lambda_adjustment_after_test": "forbidden"
+  },
+  "coordinate_system": "LPS",
+  "physical_unit": "mm",
+  "transform_direction": "Point Cloud -> CT",
+  "folds": {
+    "Fold1": {
+      "test_subject_ids": [
+        "Pat12",
+        "Pat5"
+      ],
+      "val_subject_ids": [
+        "Pat7",
+        "Pat4"
+      ],
+      "train_subject_ids": [
+        "Pat11",
+        "Pat3",
+        "Pat8",
+        "Pat9",
+        "Pat1",
+        "Pat2"
+      ]
+    },
+    "Fold2": {
+      "test_subject_ids": [
+        "Pat7",
+        "Pat4"
+      ],
+      "val_subject_ids": [
+        "Pat11",
+        "Pat3"
+      ],
+      "train_subject_ids": [
+        "Pat12",
+        "Pat5",
+        "Pat8",
+        "Pat9",
+        "Pat1",
+        "Pat2"
+      ]
+    },
+    "Fold3": {
+      "test_subject_ids": [
+        "Pat11",
+        "Pat3"
+      ],
+      "val_subject_ids": [
+        "Pat8",
+        "Pat9"
+      ],
+      "train_subject_ids": [
+        "Pat12",
+        "Pat5",
+        "Pat7",
+        "Pat4",
+        "Pat1",
+        "Pat2"
+      ]
+    },
+    "Fold4": {
+      "test_subject_ids": [
+        "Pat8",
+        "Pat9"
+      ],
+      "val_subject_ids": [
+        "Pat1",
+        "Pat2"
+      ],
+      "train_subject_ids": [
+        "Pat12",
+        "Pat5",
+        "Pat7",
+        "Pat4",
+        "Pat11",
+        "Pat3"
+      ]
+    },
+    "Fold5": {
+      "test_subject_ids": [
+        "Pat1",
+        "Pat2"
+      ],
+      "val_subject_ids": [
+        "Pat12",
+        "Pat5"
+      ],
+      "train_subject_ids": [
+        "Pat7",
+        "Pat4",
+        "Pat11",
+        "Pat3",
+        "Pat8",
+        "Pat9"
+      ]
+    }
+  },
+  "clean10_patient_ids": [
+    "Pat1",
+    "Pat2",
+    "Pat3",
+    "Pat4",
+    "Pat5",
+    "Pat7",
+    "Pat8",
+    "Pat9",
+    "Pat11",
+    "Pat12"
+  ],
+  "excluded_patient_ids": [
+    "Pat6"
+  ],
+  "failed_manifest_patient_ids": [
+    "Pat10"
+  ],
+  "defect_conditions": [
+    "defect_001_left_maxilla_cheek_small",
+    "defect_001_left_maxilla_cheek_medium",
+    "defect_001_left_maxilla_cheek_large",
+    "defect_001_right_maxilla_cheek_small",
+    "defect_001_right_maxilla_cheek_medium"
+  ],
+  "test_perturbations": [
+    {
+      "purpose": "test",
+      "severity": "mild",
+      "max_rotation_deg": 5.0,
+      "max_translation_mm": 5.0,
+      "variant_count": 5,
+      "epoch_policy": "fixed_none"
+    },
+    {
+      "purpose": "test",
+      "severity": "moderate",
+      "max_rotation_deg": 10.0,
+      "max_translation_mm": 10.0,
+      "variant_count": 5,
+      "epoch_policy": "fixed_none"
+    },
+    {
+      "purpose": "test",
+      "severity": "hard",
+      "max_rotation_deg": 20.0,
+      "max_translation_mm": 20.0,
+      "variant_count": 5,
+      "epoch_policy": "fixed_none"
+    }
+  ],
+  "test_case_count": 750,
+  "per_fold_case_count": {
+    "Fold1": 150,
+    "Fold2": 150,
+    "Fold3": 150,
+    "Fold4": 150,
+    "Fold5": 150
+  },
+  "per_patient_case_count": 75,
+  "case_identity_fields": [
+    "fold_id",
+    "subject_id",
+    "defect_id",
+    "severity",
+    "variant_id",
+    "perturbation_seed"
+  ],
+  "manifest_sha256": "812c4d18cefbfe78456526880ebaf839c9ead4f57b3d2eff900275a1a2380e24",
+  "seed_derivation": {
+    "scheme_version": "m3_6b_seed_v1",
+    "protocol_hash": "34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c",
+    "root_seed": 20260815,
+    "purpose": "test",
+    "epoch": null,
+    "defect_id_in_seed": false,
+    "algorithm": "first eight SHA-256 bytes of canonical JSON payload as unsigned big-endian uint64; same payload as perturbation.derive_perturbation_seed"
+  },
+  "perturbation_sampling": "unchanged perturbation.augment_point_sample/sample_rigid_perturbation; no perturbations sampled from real data during protocol-building",
+  "source_m3_evaluation_definition": {
+    "evaluation_protocol_version": "m3_defect_eval_clean10_v2",
+    "evaluation_protocol_hash": "cfd519b923be3b623cffec8c8f5830cb5b1160859461180eddeb7134a0adb6b0",
+    "source_evaluation_protocol_version": "m3_7_eval_v1",
+    "source_evaluation_protocol_hash": "5c1125745765664acbdf5883d9a3e328465836b33ac32898b72e9b417b03eda6",
+    "required_training_protocol_version": "m3_6b_5fold_clean10_v2",
+    "required_training_protocol_hash": "34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c",
+    "test_perturbation_source": "m3_6b_5fold_clean10_v2.test_perturbations",
+    "perturbation_seed_source": "m3_6b_seed_v1.subject_based_without_defect_id",
+    "registration_rre_threshold_deg": 5.0,
+    "registration_rte_threshold_mm": 10.0,
+    "correspondence_inlier_threshold_mm": 15.0,
+    "matching_filter_min_confidence": null,
+    "required_checkpoint_basename": "best_val_loss.pt",
+    "required_formal_training": {
+      "seed": 20260815,
+      "learning_rate": 0.0003,
+      "weight_decay": 0.0001,
+      "batch_size": 1,
+      "precision": "fp32",
+      "temperature": 0.1,
+      "sinkhorn_iterations": 20,
+      "alpha_init": 1.0,
+      "max_epochs": 20
+    },
+    "required_defect_training_adapter": "pointct_defect_training_v1",
+    "required_defect_ids": [
+      "defect_001_left_maxilla_cheek_small",
+      "defect_001_left_maxilla_cheek_medium",
+      "defect_001_left_maxilla_cheek_large",
+      "defect_001_right_maxilla_cheek_small",
+      "defect_001_right_maxilla_cheek_medium"
+    ],
+    "required_enable_m4_defect_mapping": false,
+    "required_epoch_count": 20,
+    "solver_failure_metric_policy": "null_rre_rte",
+    "zero_correspondence_policy": "zero_inliers_zero_ratio_registration_fail_closed",
+    "runtime_scope": "model_forward+matching+mutual_filtering+weighted_registration"
+  },
+  "source_m3_tre_diagnostic_definition": {
+    "diagnostic_protocol_version": "m3_metric_diagnostic_clean10_v2",
+    "diagnostic_protocol_hash": "5f40c322433c2274d356213969f9041d2931ff0e058efb0c541bcf5e1a9624bc",
+    "source_training_protocol_version": "m3_6b_5fold_clean10_v2",
+    "source_training_protocol_hash": "34866ebc5c7e3c7b18ecb1c4010217d8b2de9b64fae0d7406dabbce2d86d4a3c",
+    "source_defect_evaluation_protocol_version": "m3_defect_eval_clean10_v2",
+    "source_defect_evaluation_protocol_hash": "cfd519b923be3b623cffec8c8f5830cb5b1160859461180eddeb7134a0adb6b0",
+    "source_reference_points": "augmented_defective_point_physical_coordinates",
+    "centroid_tre_definition": "norm((R_pred*c+t_pred)-(R_gt*c+t_gt)), c=mean(source_reference_points)",
+    "point_tre_definition": "d_i=norm((R_pred*x_i+t_pred)-(R_gt*x_i+t_gt)); report mean,median,rmse,p95,max over all source_reference_points",
+    "legacy_parameter_rte_definition": "norm(t_pred-t_gt)",
+    "origin_rotation_lever_proxy_definition": "2*norm(source_centroid)*sin(rre_rad/2)",
+    "origin_rotation_lever_proxy_policy": "diagnostic_proxy_only_NOT_registration_accuracy_metric",
+    "point_tre_percentile": 95,
+    "point_tre_percentile_method": "linear",
+    "solver_failure_policy": "null_diagnostic_metrics",
+    "catastrophic_rotation_threshold_deg": 45.0,
+    "required_case_identity_fields": [
+      "fold_id",
+      "subject_id",
+      "defect_id",
+      "severity",
+      "variant_id",
+      "perturbation_seed"
+    ],
+    "legacy_continuous_abs_tolerance": 1e-06,
+    "legacy_continuous_rel_tolerance": 1e-07,
+    "legacy_case_authoritative_source": "strict_union_of_Fold1_through_Fold5_cases_jsonl",
+    "legacy_root_cases_policy": "optional_complete_union_or_exact_single_fold_invocation_artifact",
+    "expected_patient_count": 10,
+    "expected_defect_condition_count": 5,
+    "expected_defect_instance_count": 50,
+    "expected_test_case_count": 750,
+    "diagnostic_replaces_frozen_m3_metrics": false,
+    "diagnostic_changes_registration_success_threshold": false,
+    "diagnostic_changes_model_predictions": false
+  },
+  "intentional_m3_config_difference": "required_enable_m4_defect_mapping=false is M3 baseline-only provenance. M4 enables frozen Hard+Soft+Osseous; all test identities, seeds, metric thresholds and matching confidence threshold are inherited unchanged.",
+  "metrics": {
+    "registration_recall": "solver_success AND rre_deg <= 5.0 AND rte_mm <= 10.0; all frozen cases remain in denominator",
+    "rre": "unchanged evaluation.rotation_error_degrees",
+    "legacy_rte": "norm(t_pred-t_gt), origin-sensitive; retained for historical Recall and comparison",
+    "centroid_tre": "norm((R_pred*c+t_pred)-(R_gt*c+t_gt)), c=mean(source_reference_points)",
+    "point_tre": "d_i=norm((R_pred*x_i+t_pred)-(R_gt*x_i+t_gt)); report mean,median,rmse,p95,max over all source_reference_points",
+    "correspondence_inlier_threshold_mm": 15.0,
+    "matching_filter_min_confidence": null,
+    "runtime_scope": "model_forward+matching+mutual_filtering+weighted_registration",
+    "required_error_fields": [
+      "rre_deg",
+      "rte_mm",
+      "centroid_tre_mm",
+      "point_tre_mean_mm",
+      "point_tre_median_mm",
+      "point_tre_rmse_mm",
+      "point_tre_p95_mm",
+      "point_tre_max_mm"
+    ],
+    "required_descriptive_fields": [
+      "num_correspondences",
+      "num_inliers",
+      "inlier_ratio",
+      "inference_runtime_ms"
+    ]
+  },
+  "solver_failure_policy": {
+    "source_formal": "null_rre_rte",
+    "source_tre": "null_diagnostic_metrics",
+    "zero_correspondence_policy": "zero_inliers_zero_ratio_registration_fail_closed",
+    "failure_error_fields": "all required_error_fields null; no fabricated transform/zero error",
+    "failure_recall": false,
+    "denominator": "all 750 identities; failed cases and zero-success patients retained",
+    "invalid_success_transform": "use unchanged M3 formal evaluator explicit invalid_registration_output failure; null diagnostics",
+    "solver_minimum_correspondences": "unchanged num_correspondences < 3 failure; never relaxed"
+  },
+  "checkpoint_paths": {
+    "Fold1": "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold1/checkpoints/best_val_loss.pt",
+    "Fold2": "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold2/checkpoints/best_val_loss.pt",
+    "Fold3": "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold3/checkpoints/best_val_loss.pt",
+    "Fold4": "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold4/checkpoints/best_val_loss.pt",
+    "Fold5": "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold5/checkpoints/best_val_loss.pt"
+  },
+  "checkpoint_policy": {
+    "source": "M4-2D lambda_0p50, five fold best_val_loss.pt selected on validation only",
+    "required_basename": "best_val_loss.pt",
+    "binding_status_at_protocol_freeze": "PENDING_SERVER_CPU_AUDIT",
+    "binding_manifest_path": "experiments/geotransformer.pointct.baseline_v1/protocols/m4_osseous_formal_test_clean10_v1_checkpoint_binding.json",
+    "binding_manifest_policy": "CPU audit all five checkpoints and training validation logs; freeze exact SHA, epoch, objective, config, train/val provenance in no-clobber manifest; commit manifest to Git HEAD before any sample access",
+    "execution_gate": "require formal protocol and exact self-hashed binding in Git HEAD, then verify all five raw checkpoint hashes/configs/log bindings before creating current-fold dataset",
+    "deserialization": "torch.load from the verified byte buffer, map_location=cpu, weights_only=True; no fallback",
+    "checkpoint_mutation": "forbidden",
+    "preexisting_training_status_labels": "preserve legacy development/smoke labels verbatim as training provenance; formal configuration is fixed by this protocol"
+  },
+  "training_config_template": {
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "batch_size": 1,
+    "precision": "fp32",
+    "seed": 20260815,
+    "temperature": 0.1,
+    "sinkhorn_iterations": 20,
+    "alpha_init": 1.0,
+    "primary_max_distance_mm": 17.5,
+    "high_confidence_distance_mm": 15.0,
+    "hyperparameter_status": "TRAINING SMOKE DEFAULTS - NOT FROZEN PAPER HYPERPARAMETERS",
+    "split_status": "FORMAL M3-6B 5-FOLD PROTOCOL",
+    "enable_m4_defect_mapping": true,
+    "m4_hard_constraint_active": true,
+    "m4_soft_modulation_enabled": true,
+    "m4_soft_modulation_active": true,
+    "m4_soft_sigma_mm": 60.0,
+    "m4_soft_strength": 2.0,
+    "m4_soft_hyperparameter_status": "M4 DEVELOPMENT HYPERPARAMETERS - NOT FROZEN PAPER HYPERPARAMETERS",
+    "m4_osseous_prior_enabled": true,
+    "m4_osseous_prior_active": true,
+    "m4_osseous_strength": 0.5,
+    "osseous_center_hu": 300.0,
+    "osseous_tau_hu": 100.0,
+    "osseous_radius_mm": 20.0,
+    "m4_osseous_hyperparameter_status": "DEVELOPMENT_ONLY - NOT FROZEN PAPER HYPERPARAMETER"
+  },
+  "outputs": {
+    "root": "checkpoints/m4_osseous_formal_test_clean10_v1/",
+    "per_fold_directory": "fold1 through fold5",
+    "per_fold_cases": "formal_test_cases.jsonl",
+    "per_fold_summary": "formal_test_summary.json",
+    "overall_summary": "formal_test_summary.json",
+    "paired_comparison": "m3_vs_m4_paired_comparison.json",
+    "publication": "atomic no-clobber; reserve fold directory before execution; any existing/partial formal output rejects rerun"
+  },
+  "case_output_fields": [
+    "artifact_scope",
+    "case_key",
+    "centroid_tre_mm",
+    "checkpoint_binding_sha256",
+    "checkpoint_sha256",
+    "defect_id",
+    "fold_id",
+    "inference_runtime_ms",
+    "inlier_ratio",
+    "lambda_oss",
+    "num_correspondences",
+    "num_inliers",
+    "perturbation_seed",
+    "point_tre_max_mm",
+    "point_tre_mean_mm",
+    "point_tre_median_mm",
+    "point_tre_p95_mm",
+    "point_tre_rmse_mm",
+    "protocol_sha256",
+    "protocol_version",
+    "registration_recall_hit",
+    "rre_deg",
+    "rte_mm",
+    "severity",
+    "solver_status",
+    "solver_success",
+    "subject_id",
+    "variant_id"
+  ],
+  "paired_comparison": {
+    "m3_inputs": "explicit future roots; strict Fold1..Fold5/cases.jsonl AND Fold1..Fold5/diagnostic_cases.jsonl only; never discover results",
+    "m3_validation": "source protocol SHA and exact identity union; diagnostic vs legacy success/count/Recall exact; RRE/RTE/inlier-ratio comparisons use frozen diagnostic tolerances",
+    "m4_validation": "exact frozen identity grid, formal protocol SHA and committed checkpoint binding SHA per case",
+    "delta_direction": "M4 minus M3",
+    "success_and_recall_delta": "all exact case pairs, including failures",
+    "error_delta": "both-solver-success pairs only; report pair count and M3-only/M4-only/neither success counts, no imputation",
+    "levels": [
+      "patient",
+      "fold",
+      "overall_descriptive"
+    ],
+    "patient_stability": "retain every patient, even zero-success or zero-common-success; error metrics null with count 0",
+    "statistics": [
+      "mean",
+      "median",
+      "p95_linear",
+      "count"
+    ],
+    "patient_macro": "statistics of patient median errors and common-pair median deltas; non-null count explicit",
+    "post_test_rule_change": "forbidden",
+    "legacy_rte_caveat": "origin-sensitive; not replaced or retuned using TRE"
+  },
+  "current_task_firewall": {
+    "allowed_runtime": [
+      "unittest synthetic/mock fixtures",
+      "CPU contract audit"
+    ],
+    "dataset_instantiation": false,
+    "existing_test_result_reads": false,
+    "formal_test_execution": false,
+    "gpu_used": false,
+    "retraining": false,
+    "checkpoint_modification": false
+  },
+  "protocol_sha256": "e33c0c4721e1dc303b9f5211b3f7ca2854f15e7933ae6ebd7a14303cd6c67f22"
+}

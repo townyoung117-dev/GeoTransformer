@@ -1,0 +1,19 @@
+{
+  "CPU_CONTRACT_AUDIT": "PASS",
+  "FORMAL_PROTOCOL_SHA": "e33c0c4721e1dc303b9f5211b3f7ca2854f15e7933ae6ebd7a14303cd6c67f22",
+  "SOURCE_V2_AMENDMENT_SHA": "fe59f307eca6355d835fad5a9a5d18f8b7f24b940747700149b7a5668413e13c",
+  "SELECTED_LAMBDA_OSS": 0.5,
+  "TEST_GRID_CASE_COUNT": 750,
+  "CHECKPOINT_BINDING": "PENDING_SERVER_CPU_AUDIT",
+  "FORMAL_TEST_ACCESSED": false,
+  "GPU_USED": false,
+  "reads": "frozen protocols and implementation source only",
+  "artifact_scope": "protocol_building_cpu_audit",
+  "unittest_pass": 53,
+  "real_checkpoint_data_result_opens": 0,
+  "real_dataset_instantiations": 0,
+  "io_guard": "Python audit hook rejected all repository checkpoints/ and local_data/ file opens throughout unittest and contract audit",
+  "fixtures": "synthetic/mock only; original M3 manifest generator used without datasets",
+  "torch_imported": false,
+  "source_implementation_commit": "f5bc5ab74a5d095ff2f26a8e35b914057731cda4"
+}

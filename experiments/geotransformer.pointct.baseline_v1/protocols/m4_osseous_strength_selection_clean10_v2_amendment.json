@@ -1,0 +1,157 @@
+{
+  "protocol_version": "m4_osseous_strength_selection_clean10_v2_amendment",
+  "protocol_status": "POST_HOC_VALIDATION_ONLY_AMENDMENT_FROZEN_BEFORE_FORMAL_TEST",
+  "artifact_scope": "validation_only",
+  "selection_basis": "POST_HOC_VALIDATION_ONLY",
+  "source_v1_protocol_version": "m4_osseous_strength_selection_clean10_v1",
+  "source_v1_protocol_sha256": "a03a3cd030830c58844d10163a34d10a7db635181a2da5ed1681d09aa802ca38",
+  "source_v1_summary_sha256": "dc8ef14428481bea6dc2addaf6b555b90f999b023252dcc0bb75b33063762b42",
+  "source_v1_summary_path": "checkpoints/m4_osseous_strength_selection_v1/validation_selection_summary.json",
+  "source_v1_result": {
+    "selection_eligible": false,
+    "selection_reason": "one_or_more_zero_success_patients",
+    "SELECTED_LAMBDA_OSS": null,
+    "status": "FAILED_CLEANLY"
+  },
+  "hash_contract": {
+    "algorithm": "SHA-256",
+    "protocol_serialization": "json.dumps(sort_keys=True,separators=(',',':'),ensure_ascii=True,allow_nan=False)",
+    "exclude_top_level_fields": [
+      "protocol_sha256"
+    ],
+    "encoding": "UTF-8",
+    "source_summary_and_validation_hashes": "exact original file bytes"
+  },
+  "lambda_oss_grid": [
+    0.25,
+    0.5,
+    1.0,
+    2.0
+  ],
+  "validation_folds": {
+    "Fold1": [
+      "Pat7",
+      "Pat4"
+    ],
+    "Fold2": [
+      "Pat11",
+      "Pat3"
+    ],
+    "Fold3": [
+      "Pat8",
+      "Pat9"
+    ],
+    "Fold4": [
+      "Pat1",
+      "Pat2"
+    ],
+    "Fold5": [
+      "Pat12",
+      "Pat5"
+    ]
+  },
+  "clean10_patient_ids": [
+    "Pat1",
+    "Pat2",
+    "Pat3",
+    "Pat4",
+    "Pat5",
+    "Pat7",
+    "Pat8",
+    "Pat9",
+    "Pat11",
+    "Pat12"
+  ],
+  "excluded_patient_ids": [
+    "Pat6"
+  ],
+  "expected_cases_per_fold": 30,
+  "expected_cases_per_lambda": 150,
+  "expected_cases_per_patient": 15,
+  "expected_lambda_fold_combinations": 20,
+  "expected_total_cases": 600,
+  "case_identity_and_seed_policy": "unchanged V1 exact validation identities: five frozen defects x three frozen severities per patient",
+  "stage_0": {
+    "candidate_complete": "every one of the 10 validation patients has solver_success_count >= 1 among its original 15 frozen cases",
+    "candidate_incomplete": "any patient has solver_success_count == 0",
+    "malformed_or_missing_cases": "reject entire aggregation; never treat as an incomplete candidate",
+    "zero_complete_candidates": "fail closed; eligible=false and selected=null",
+    "one_complete_candidate": "select directly",
+    "multiple_complete_candidates": "apply inherited primary, secondary, tertiary stage-min filters, then smallest lambda"
+  },
+  "inherited_selection_rule": {
+    "eligibility": "all four lambdas, all five folds, exactly ten unique validation patients per lambda, complete case identities, and no zero-success patient",
+    "primary": {
+      "metric": "median of the 10 patient-level median centroid_tre_mm values",
+      "direction": "minimize",
+      "practical_tie_threshold_mm": 0.25
+    },
+    "secondary": {
+      "metric": "median of the 10 patient-level median point_tre_mean_mm values",
+      "direction": "minimize",
+      "practical_tie_threshold_mm": 0.25
+    },
+    "tertiary": {
+      "metric": "median of the 10 patient-level median rre_deg values",
+      "direction": "minimize",
+      "practical_tie_threshold_deg": 0.25
+    },
+    "deterministic_algorithm": [
+      "Retain candidates whose primary value is at most 0.25 mm above the minimum primary value.",
+      "Among survivors, retain candidates whose secondary value is at most 0.25 mm above the minimum secondary value.",
+      "Among survivors, retain candidates whose tertiary value is at most 0.25 deg above the minimum tertiary value.",
+      "Select the smallest lambda_oss among remaining candidates."
+    ],
+    "final_output_key": "SELECTED_LAMBDA_OSS",
+    "selection_before_complete_five_fold_grid": "forbidden"
+  },
+  "inherited_rule_scope": "V1 is preserved verbatim as provenance; V2 replaces only the global eligibility rule with Stage 0. V1 primary, secondary, tertiary and final tie policy are unchanged.",
+  "patient_metric_policy": "median over solver-success cases, then median over all 10 patient medians; failures remain in the 15-case denominator",
+  "validation_artifact_sha256s": {
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p25/fold1/validation/validation_cases.jsonl": "3fedcb78098dc26a2a0a6240b7bfc71feae656aa0424c2dc5189d2bbd0978ce9",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p25/fold2/validation/validation_cases.jsonl": "53faa3f8aa6ae9046f82a09606f9e29676e89e9e47ddaca9cd75bbb07423cfd1",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p25/fold3/validation/validation_cases.jsonl": "b9ff082ca1acc83c135fb95219792a36d621bcc8d546930312f4ec7856de30ae",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p25/fold4/validation/validation_cases.jsonl": "6f5590db3e4f2eb8121078b345d3c9ce837890082666d07ba0f58faa6413215d",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p25/fold5/validation/validation_cases.jsonl": "263edc152d7ada26006337a9c697243439f501085dbc8c1ee2f348e0d1d4a271",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold1/validation/validation_cases.jsonl": "23b06aec208027ebc057b204345e9624d22e411bc6475a8acfca30c9000501aa",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold2/validation/validation_cases.jsonl": "0251966ea6744029e4d30d7995aae150aad147a7e06fad0cfe31d9e0983ba3d9",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold3/validation/validation_cases.jsonl": "16f6118f1ae7d0323dc1b158f1a5ed2a65c7ba25c19f56f5337eee8d5e8f778a",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold4/validation/validation_cases.jsonl": "4d42da8c87e78ee6346a494d74ca0338fa99f5267b0088826c5b0cd375bb2d7f",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_0p50/fold5/validation/validation_cases.jsonl": "c879780018bb6ed402f1621afeca02fb5ef4c271a1e20ebc2a5c4de3cfe1251c",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_1p00/fold1/validation/validation_cases.jsonl": "154507aa2fb09e5be1f4b557fa4cf00137f234d84b8bb464c0d595616ca83e42",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_1p00/fold2/validation/validation_cases.jsonl": "3dfd1d263560b8e7d58aa220631f3e824fe30dca37b92264d8cf556936e13207",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_1p00/fold3/validation/validation_cases.jsonl": "f8e85d6c44319564ecf689d91ba9e99a0efd2615939345eafc6510e32e548fe4",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_1p00/fold4/validation/validation_cases.jsonl": "5e12e5e9e3a7392bd939cb433a917d24855459af6cf58b364649d0fd29a0722f",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_1p00/fold5/validation/validation_cases.jsonl": "c550c8c2dcdce50aeab39c76489984a282b94df8923c48740e9ddbfd45e75c30",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_2p00/fold1/validation/validation_cases.jsonl": "3e4cff72aef3eac9427ec67154fdac69a97e790872bdab0f278eb16e40b46cc5",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_2p00/fold2/validation/validation_cases.jsonl": "32cb74dd930d30dace7f276f6e3c6138f9c5ccf020f681f899262238636367f9",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_2p00/fold3/validation/validation_cases.jsonl": "dc3d6c4ef31d5caf19356b5e20c01f382ca8f321c55d67b7aa5e42fde95d5186",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_2p00/fold4/validation/validation_cases.jsonl": "f002380d7911d87e570eacb60eb21f4d96191ed6b517c5a5ac255d62e82db899",
+    "checkpoints/m4_osseous_strength_selection_v1/lambda_2p00/fold5/validation/validation_cases.jsonl": "3f23fc8b39603ad3d5fa1e7de11785ef14e44101a5946e3c76009452d3c268fb"
+  },
+  "input_firewall": {
+    "paths": "fixed 20 validation JSONL paths plus bound V1 summary and V1/V2 protocol/sidecar metadata only",
+    "arbitrary_path_arguments": false,
+    "symlink_and_reparse_components": "reject",
+    "duplicate_json_keys": "reject",
+    "unexpected_case_or_summary_fields": "reject",
+    "nonfinite_numbers": "reject",
+    "test_like_result_keys_and_values": "reject",
+    "checkpoint_or_training_log_loading": false,
+    "dataset_loading": false,
+    "formal_test_accessed": false,
+    "gpu_allowed": false,
+    "retraining_allowed": false
+  },
+  "v1_summary_verification": {
+    "structure_types_counts_and_states": "exact",
+    "finite_float_relative_tolerance": 1e-12,
+    "finite_float_absolute_tolerance": 1e-12,
+    "reason": "allow last-bit cross-runtime summation differences without rewriting V1 bytes"
+  },
+  "output_path": "checkpoints/m4_osseous_strength_selection_v1/validation_selection_v2_amendment_summary.json",
+  "output_policy": "atomic no-clobber publication; existing output always rejected; fixed-output verification is read-only",
+  "interpretation": "post-hoc validation-only amendment after seeing V1 validation failures, frozen before formal test; not V1 preregistered selection and not formal test performance evidence",
+  "mechanism_caveat": "All observed failures are insufficient_correspondences. Larger-lambda degradation is consistent with stronger osseous modulation reducing surviving correspondences; neither a unique causal mechanism nor an evaluator bug is established. Solver num_correspondences < 3 condition and Hard/Soft/Continuous Osseous Support Prior mathematical definitions are unchanged.",
+  "protocol_sha256": "fe59f307eca6355d835fad5a9a5d18f8b7f24b940747700149b7a5668413e13c"
+}
